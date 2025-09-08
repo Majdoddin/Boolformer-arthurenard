@@ -257,6 +257,57 @@ class Vocabulary:
 
         return full_tokenized_tensor, less_frequent_result
 
+    def tokenize_generation_mode(self, configFormula: ConfigFormula) -> torch.Tensor:
+        """Tokenize input for generation mode: just <gen> token + padding.
+        
+        Args:
+            configFormula: Configuration for tokenization
+            
+        Returns:
+            Tokenized tensor for generation mode input
+        """
+        gen_token = torch.tensor([self.token_to_id["<gen>"]], dtype=torch.long)
+        
+        # Pad to maximum input length (since generation has minimal input)
+        nb_pad_tokens = max(0, configFormula.NB_INPUT_TOKENS - 1)  # -1 for the <gen> token
+        padding_tokens = torch.full((nb_pad_tokens,), self.PAD_id, dtype=torch.long)
+        
+        # Combine: [<gen>] + [<PAD>...]
+        result = torch.cat([gen_token, padding_tokens], dim=0)
+        return result
+
+    def tokenize_regression_mode(self, evaluations: torch.Tensor, configFormula: ConfigFormula) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Tokenize input for regression mode: <regress> + truth_table + <EOS> + padding.
+        
+        Args:
+            evaluations: Tensor of evaluation results (truth table)
+            configFormula: Configuration for tokenization
+            
+        Returns:
+            Tuple containing:
+                - Tokenized tensor for regression mode input
+                - Less frequent result tensor
+        """
+        regress_token = torch.tensor([self.token_to_id["<regress>"]], dtype=torch.long)
+        eos_token = torch.tensor([self.token_to_id["<EOS>"]], dtype=torch.long)
+        
+        # Get tokenized evaluation data (reuse existing logic)
+        eval_tokenized, less_frequent_result = self.tokenize_eval(evaluations, configFormula)
+        
+        # Remove existing padding from eval_tokenized to rebuild sequence
+        # Find the first PAD token to determine actual length
+        pad_id = self.PAD_id
+        eval_tokens_only = eval_tokenized[eval_tokenized != pad_id]
+        
+        # Calculate padding needed
+        sequence_length = 1 + len(eval_tokens_only) + 1  # <regress> + eval_tokens + <EOS>
+        nb_pad_tokens = max(0, configFormula.NB_INPUT_TOKENS - sequence_length)
+        padding_tokens = torch.full((nb_pad_tokens,), pad_id, dtype=torch.long)
+        
+        # Combine: [<regress>] + eval_tokens + [<EOS>] + [<PAD>...]
+        result = torch.cat([regress_token, eval_tokens_only, eos_token, padding_tokens], dim=0)
+        
+        return result, less_frequent_result
 
 
 def create_both_vocabs(config: ConfigFormula, verbose: bool = False) -> Tuple[Vocabulary, Vocabulary]:

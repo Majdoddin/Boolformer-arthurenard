@@ -23,7 +23,7 @@ NOISY: bool = False
 ####################
 
 # Special tokens
-INPUT_SPECIAL_TOKENS = ["<PAD>"]  # pad for the evaluation generation
+INPUT_SPECIAL_TOKENS = ["<PAD>", "<gen>", "<regress>"]  # pad for evaluation generation; mode tokens for multitask
 OUTPUT_SPECIAL_TOKENS = ["<SOS_0>", "<SOS_1>", "<EOS>", "<PAD>"]  # Start with less_frqt_rslt; pad for the formula generation; end
 
 
