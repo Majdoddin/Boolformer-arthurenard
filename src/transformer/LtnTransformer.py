@@ -10,7 +10,7 @@ from .TransformerModel import TransformerModel
 from .metrics import accuracy
 from ..ConfigClasses import ConfigTransformer, ConfigFormula
 from ..formula import Vocabulary, Formula
-from ..general_functions import polish_to_expr
+from ..general_functions import polish_to_expr, pts_generator
 
 class LtnTransformer(LightningModule):
     """Lightning module for training the transformer model.
@@ -153,23 +153,96 @@ class LtnTransformer(LightningModule):
         """
         return self.model(x)
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], 
-                     batch_idx: int) -> torch.Tensor:
-        """Perform a training step.
+    def _generate_samples(self, num_samples: int):
+        """Generate samples using <gen> mode and separate valid/invalid formulas.
         
         Args:
-            batch: Tuple of (input, target) tensors
+            num_samples: Number of samples to generate
+            
+        Returns:
+            Dict with separate valid regression data and invalid generation formulas
+        """
+        if num_samples <= 0:
+            return None
+            
+        # Step 1: Create generation mode input
+        config = ConfigFormula()  # TODO: Get actual config
+        
+        gen_input = self.input_vocab.tokenize_generation_mode(config)
+        gen_input = gen_input.unsqueeze(0).repeat(num_samples, 1).to(self.device)
+        
+        # Step 2: Generate formulas using the model
+        sos_id = self.output_vocab.SOS_id(0)  # Default SOS
+        generated_outputs, _ = self.model.generate(
+            gen_input, 
+            sos_id=sos_id, 
+            nb_to_gen=1, 
+            temperature=1.0
+        )
+        
+        # Step 3: Separate valid and invalid formulas
+        valid_regression_src = []
+        valid_regression_tgt = []
+        invalid_generation_formulas = []
+        
+        for i in range(num_samples):
+            generated_tokens = generated_outputs[i, 0]
+            formula_tokens = self.output_vocab.detokenize_expr(generated_tokens.cpu().tolist())
+            
+            formula_expr = polish_to_expr(formula_tokens, config)
+            
+            if (formula_expr != "Invalid Polish" and 
+                (formula := Formula(config, math_expr=formula_expr, simplify=True)).is_valid):
+                # Valid formula - add to regression training data
+                pts = pts_generator(config, formula.dim)
+                evaluations = formula.evaluate_pts(pts)
+                
+                regress_src, less_freq = self.input_vocab.tokenize_regression_mode(evaluations, config)
+                regress_tgt = self.output_vocab.tokenize_expr(formula.polish_expr, config, less_freq)
+                
+                valid_regression_src.append(regress_src)
+                valid_regression_tgt.append(regress_tgt)
+            else:
+                # Invalid formula - just add to generation training data
+                invalid_generation_formulas.append(generated_tokens)
+        
+        return {
+            'valid_regression': (torch.stack(valid_regression_src), torch.stack(valid_regression_tgt)) if valid_regression_src else None,
+            'invalid_generation': torch.stack(invalid_generation_formulas) if invalid_generation_formulas else None,
+            'valid_count': len(valid_regression_src),
+            'invalid_count': len(invalid_generation_formulas)
+        }
+
+    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], 
+                     batch_idx: int) -> torch.Tensor:
+        """Perform a training step with curriculum learning.
+        
+        Args:
+            batch: Tuple of (input, target) tensors from synthetic data
             batch_idx: Index of the current batch
             
         Returns:
-            Loss tensor
+            Combined loss tensor
         """
         src, tgt = batch
+        batch_size = src.size(0)
 
-        tgt_input = tgt[:, :-1]  # Excluding the last token for input
-        tgt_output = tgt[:, 1:]  # Target excludes the first token
+        # Step 1: Generate <gen> mode samples
+        num_gen_samples = batch_size // 2  # Generate half as many as synthetic
+        gen_data = self._generate_samples(num_gen_samples)
+        
+        # Step 2: Combine synthetic and valid generated samples for regression
+        if gen_data and gen_data['valid_regression']:
+            combined_src = torch.cat([src, gen_data['valid_regression'][0]], dim=0)
+            combined_tgt = torch.cat([tgt, gen_data['valid_regression'][1]], dim=0)
+        else:
+            combined_src, combined_tgt = src, tgt
 
-        output = self.model(src, tgt_input)
+        # Step 3: Run regression mode on all samples (current training)
+        tgt_input = combined_tgt[:, :-1]  # Excluding the last token for input
+        tgt_output = combined_tgt[:, 1:]  # Target excludes the first token
+
+        output = self.model(combined_src, tgt_input)
 
         # Log the learning rate
         lr = self.trainer.optimizers[0].param_groups[0]['lr']
@@ -185,7 +258,7 @@ class LtnTransformer(LightningModule):
         self.log("train_loss", loss.item(), on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log("train_acc", acc.item(), on_step=True, on_epoch=False, prog_bar=True, logger=True)
 
-        return full_loss
+        return loss
     
     def get_formula_scores(self, 
                          c_formula: ConfigFormula,
