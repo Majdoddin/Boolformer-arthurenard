@@ -185,7 +185,7 @@ class LtnTransformer(LightningModule):
         self.log("train_loss", loss.item(), on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log("train_acc", acc.item(), on_step=True, on_epoch=False, prog_bar=True, logger=True)
 
-        return full_loss
+        return loss
     
     def get_formula_scores(self, 
                          c_formula: ConfigFormula,
