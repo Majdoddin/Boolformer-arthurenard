@@ -25,12 +25,13 @@ Extended Boolformer with multitask learning capabilities for curriculum learning
 **File**: `src/transformer/LtnTransformer.py`
 - Added `_generate_samples()`: Runs model in generation mode, creates training pairs
 - Modified `training_step()`: Combines synthetic and model-generated samples
-- Implements curriculum learning logic for adaptive training
+- Implements adversarial curriculum learning: rewards generation of formulas that regression mode cannot solve
+- Captures generation log probabilities for curriculum loss computation
 
 ## Architecture
 - **Generation mode**: `<gen>` → formula (teaches model to generate valid formulas)
 - **Regression mode**: `<regress> + truth_table + <EOS>` → formula (original task)
-- **Curriculum learning**: Model generates its own training data, adapts based on success rate
+- **Adversarial curriculum learning**: Model generates formulas, gets rewarded for creating challenges the regression model cannot solve
 
 ## Usage
 ```python
@@ -53,7 +54,8 @@ uv run python scripts/train.py -r multitask_run \
 ```
 
 ## Key Features
-- Self-supervised curriculum learning
-- Mode-aware tokenization
-- Adaptive loss weighting based on generation success rate
-- Temperature-based sampling for diversity
+- Adversarial self-supervised curriculum learning with reward/penalty system
+- Mode-aware tokenization with `<gen>` and `<regress>` tokens
+- Dual loss system: loss1 (regression) + loss2 (adversarial generation)
+- Comprehensive metrics logging including regression success rate
+- Temperature-based sampling for formula generation diversity

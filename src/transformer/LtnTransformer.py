@@ -173,7 +173,7 @@ class LtnTransformer(LightningModule):
         
         # Step 2: Generate formulas using the model
         sos_id = self.output_vocab.SOS_id(0)  # Default SOS
-        generated_outputs, _ = self.model.generate(
+        generated_outputs, generation_probs = self.model.generate(
             gen_input, 
             sos_id=sos_id, 
             nb_to_gen=1, 
@@ -184,6 +184,7 @@ class LtnTransformer(LightningModule):
         valid_regression_src = []
         valid_regression_tgt = []
         invalid_generation_formulas = []
+        gen_logprobs = []
         
         for i in range(num_samples):
             generated_tokens = generated_outputs[i, 0]
@@ -202,6 +203,7 @@ class LtnTransformer(LightningModule):
                 
                 valid_regression_src.append(regress_src)
                 valid_regression_tgt.append(regress_tgt)
+                gen_logprobs.append(generation_probs[i])
             else:
                 # Invalid formula - just add to generation training data
                 invalid_generation_formulas.append(generated_tokens)
@@ -210,7 +212,8 @@ class LtnTransformer(LightningModule):
             'valid_regression': (torch.stack(valid_regression_src), torch.stack(valid_regression_tgt)) if valid_regression_src else None,
             'invalid_generation': torch.stack(invalid_generation_formulas) if invalid_generation_formulas else None,
             'valid_count': len(valid_regression_src),
-            'invalid_count': len(invalid_generation_formulas)
+            'invalid_count': len(invalid_generation_formulas),
+            'generation_logprobs': gen_logprobs if valid_regression_src else None
         }
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], 
@@ -244,19 +247,55 @@ class LtnTransformer(LightningModule):
 
         output = self.model(combined_src, tgt_input)
 
+        # Compute loss1: Standard regression loss
+        loss1 = self.criterion(output.permute(0, 2, 1), tgt_output)
+        
+        # Compute loss2: Adversarial generation loss
+        loss2 = torch.tensor(0.0, device=self.device)
+        if gen_data and gen_data['valid_regression'] and gen_data['generation_logprobs']:
+            # Get regression predictions for generated samples
+            gen_start_idx = batch_size
+            gen_output = output[gen_start_idx:]
+            gen_tgt_output = tgt_output[gen_start_idx:]
+            
+            # Check which generated formulas were solved correctly by regression model
+            gen_predictions = torch.argmax(gen_output, dim=-1)
+            correct_mask = (gen_predictions == gen_tgt_output).all(dim=-1)
+            
+            # Reward/penalty system:
+            # -1 penalty for correctly solved formulas (too easy)
+            # +1 reward for incorrectly solved formulas (good difficulty)  
+            rewards = torch.where(correct_mask, -1.0, 1.0)
+            
+            # Apply rewards to original generation log probabilities
+            gen_logprobs_tensor = torch.tensor(gen_data['generation_logprobs'], device=self.device)
+            loss2 = -(rewards * gen_logprobs_tensor).mean()
+
+        total_loss = loss1 + 0.1 * loss2
+
         # Log the learning rate
         lr = self.trainer.optimizers[0].param_groups[0]['lr']
         self.log('learning_rate', lr, prog_bar=True, on_step=True, on_epoch=False, logger=True)
 
         # logs and accuracy metrics for each training_step,
         # and the average across the epoch, to the progress bar and logger
-        loss = self.criterion(output.permute(0, 2, 1), tgt_output)  # Adjusting output for CrossEntropyLoss
+        loss = total_loss  # Use total loss including adversarial component
         full_loss = self.full_criterion(output.permute(0, 2, 1), tgt_output)  # Taking the PAD in count!
         
         acc = accuracy(output, tgt_output, self.out_spe_ids)
         self.log("train_full_loss", full_loss.item(), on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log("train_loss", loss.item(), on_step=True, on_epoch=False, prog_bar=True, logger=True)
         self.log("train_acc", acc.item(), on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        
+        # Log curriculum learning metrics
+        self.log("loss1_regression", loss1.item(), on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        self.log("loss2_generation", loss2.item(), on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        if gen_data:
+            self.log("valid_gen_samples", gen_data['valid_count'], on_step=True, on_epoch=False, prog_bar=False, logger=True)
+            self.log("invalid_gen_samples", gen_data['invalid_count'], on_step=True, on_epoch=False, prog_bar=False, logger=True)
+            if gen_data['valid_regression'] and gen_data['generation_logprobs']:
+                success_rate = correct_mask.float().mean().item()
+                self.log("regression_success_rate", success_rate, on_step=True, on_epoch=False, prog_bar=True, logger=True)
 
         return loss
     

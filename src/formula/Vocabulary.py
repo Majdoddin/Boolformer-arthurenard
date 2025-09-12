@@ -8,31 +8,31 @@ from ..ConfigClasses import ConfigFormula
 
 class Vocabulary:
     """Manages tokenization vocabularies for formula processing.
-    
+
     Handles conversion between tokens and IDs for both input evaluations
     and output expressions.
-    
+
     Attributes:
         token_to_id: Maps tokens to unique IDs
         id_to_token: Maps IDs back to tokens
         special_tokens: List of special tokens (PAD, SOS, etc.)
     """
 
-    def __init__(self, 
+    def __init__(self,
                  configFormula: Optional[ConfigFormula] = None,
                  input_auto_fill: bool = False,
                  output_auto_fill: bool = False):
         """Initialize vocabulary.
-        
+
         Args:
             configFormula: Configuration for vocabulary setup
             input_auto_fill: Whether to auto-fill input vocabulary
             output_auto_fill: Whether to auto-fill output vocabulary
-            
+
         Raises:
             ValueError: If auto-fill requested without config
         """
-        self.token_to_id: Dict[Union[str, torch.Tensor], int] = {}    
+        self.token_to_id: Dict[Union[str, torch.Tensor], int] = {}
         self.id_to_token: Dict[int, str] = {}
         self.special_tokens: List[str] = []
 
@@ -40,7 +40,7 @@ class Vocabulary:
             if configFormula is None:
                 raise ValueError("Configuration required for auto-fill")
             self.input_auto_fill_vocabulary(configFormula=configFormula)
-            
+
         if output_auto_fill:
             if configFormula is None:
                 raise ValueError("Configuration required for auto-fill")
@@ -154,27 +154,27 @@ class Vocabulary:
                 detokenized.append(token)
         return detokenized
 
-    def tokenize_eval(self, 
+    def tokenize_eval(self,
                      evaluations: torch.Tensor,
                      configFormula: ConfigFormula) -> Tuple[torch.Tensor, torch.Tensor]:
         """Tokenize evaluation results.
-        
+
         Args:
             evaluations: Tensor of evaluation results
             configFormula: Configuration for tokenization
-            
+
         Returns:
             Tuple containing:
                 - Tokenized evaluations tensor
                 - Less frequent result tensor
-                
+
         Raises:
             ValueError: If tokenization fails
         """
         # Tokenization for boolean points and values
         def pre_tokenize(value: float) -> str:
             return str(int(value))
-        
+
         def less_frequent(results):
             """
             Determine the less frequent result (either 0 or 1)
@@ -196,8 +196,8 @@ class Vocabulary:
                 # Find the result with the minimum count
                 less_frequent_result = torch.tensor(1)
 
-            return less_frequent_result      
-        
+            return less_frequent_result
+
         num_dimensions = evaluations.shape[1] - 1  # Last column is the evaluated value
         dim_max = configFormula.DIMENSION_MAX
 
@@ -231,7 +231,7 @@ class Vocabulary:
             final_len = 2 ** (dim_max - 1)
 
             less_frequent_result = less_frequent(results)
-                    
+
             # Filter evaluations to include only points with the less frequent result
             mask = (results == less_frequent_result)
             filtered_points = points[mask]
@@ -259,30 +259,30 @@ class Vocabulary:
 
     def tokenize_generation_mode(self, configFormula: ConfigFormula) -> torch.Tensor:
         """Tokenize input for generation mode: just <gen> token + padding.
-        
+
         Args:
             configFormula: Configuration for tokenization
-            
+
         Returns:
             Tokenized tensor for generation mode input
         """
         gen_token = torch.tensor([self.token_to_id["<gen>"]], dtype=torch.long)
-        
+
         # Pad to maximum input length (since generation has minimal input)
         nb_pad_tokens = max(0, configFormula.NB_INPUT_TOKENS - 1)  # -1 for the <gen> token
         padding_tokens = torch.full((nb_pad_tokens,), self.PAD_id, dtype=torch.long)
-        
+
         # Combine: [<gen>] + [<PAD>...]
         result = torch.cat([gen_token, padding_tokens], dim=0)
         return result
 
     def tokenize_regression_mode(self, evaluations: torch.Tensor, configFormula: ConfigFormula) -> Tuple[torch.Tensor, torch.Tensor]:
         """Tokenize input for regression mode: <regress> + truth_table + <EOS> + padding.
-        
+
         Args:
             evaluations: Tensor of evaluation results (truth table)
             configFormula: Configuration for tokenization
-            
+
         Returns:
             Tuple containing:
                 - Tokenized tensor for regression mode input
@@ -290,33 +290,33 @@ class Vocabulary:
         """
         regress_token = torch.tensor([self.token_to_id["<regress>"]], dtype=torch.long)
         eos_token = torch.tensor([self.token_to_id["<EOS>"]], dtype=torch.long)
-        
+
         # Get tokenized evaluation data (reuse existing logic)
         eval_tokenized, less_frequent_result = self.tokenize_eval(evaluations, configFormula)
-        
+
         # Remove existing padding from eval_tokenized to rebuild sequence
         # Find the first PAD token to determine actual length
         pad_id = self.PAD_id
         eval_tokens_only = eval_tokenized[eval_tokenized != pad_id]
-        
+
         # Calculate padding needed
         sequence_length = 1 + len(eval_tokens_only) + 1  # <regress> + eval_tokens + <EOS>
         nb_pad_tokens = max(0, configFormula.NB_INPUT_TOKENS - sequence_length)
         padding_tokens = torch.full((nb_pad_tokens,), pad_id, dtype=torch.long)
-        
+
         # Combine: [<regress>] + eval_tokens + [<EOS>] + [<PAD>...]
         result = torch.cat([regress_token, eval_tokens_only, eos_token, padding_tokens], dim=0)
-        
+
         return result, less_frequent_result
 
 
 def create_both_vocabs(config: ConfigFormula, verbose: bool = False) -> Tuple[Vocabulary, Vocabulary]:
     """Create input and output vocabularies for formula processing.
-    
+
     Args:
         config: Configuration object containing vocabulary settings
         verbose: Whether to print creation status
-        
+
     Returns:
         Tuple containing:
             - Input vocabulary
