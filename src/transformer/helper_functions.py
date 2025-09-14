@@ -1,4 +1,6 @@
 import torch
+from typing import List, Tuple
+from torch.nn.utils.rnn import pad_sequence
 from src.ConfigClasses import ConfigFormula
 
 def find_specific_id(tensor: torch.Tensor, target_id: int) -> int | None:
@@ -37,4 +39,28 @@ def get_number_of_candidates(config: ConfigFormula, tensor: torch.Tensor, pad_id
     if first_pad_index is None:
         return len(tensor) - result_size_adjustment
 
-    return first_pad_index 
+    return first_pad_index
+
+def dynamic_collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor]], pad_id: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Custom collate function for dynamic batch padding.
+
+    Pads target sequences to the longest sequence in the batch instead of
+    using fixed EXPR_SIZE_MAX padding.
+
+    Args:
+        batch: List of (input, target) tensor tuples
+        pad_id: The ID of the PAD token for padding
+
+    Returns:
+        Tuple of (inputs, targets) with targets dynamically padded
+    """
+    inputs, targets = zip(*batch)
+
+    # Stack inputs (already have consistent size from tokenize_regression_mode)
+    inputs_batch = torch.stack(inputs)
+
+    # Dynamically pad targets to longest sequence in batch
+    targets_padded = pad_sequence(targets, batch_first=True, padding_value=pad_id)
+
+    return inputs_batch, targets_padded 

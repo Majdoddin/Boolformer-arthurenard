@@ -119,13 +119,10 @@ class Vocabulary:
         token_ids = [self.token_to_id[token] for token in expression if isinstance(token, str)]
         tokenized = torch.tensor(token_ids, dtype=torch.long)
 
-        # Prepare tensor for <PAD> tokens
-        nb_pad_tokens = max(0, configFormula.EXPR_SIZE_MAX - len(tokenized) - 2)  # -2 bc of the SOS and the EOS
-        padding_tokens = torch.full((nb_pad_tokens,), self.PAD_id, dtype=torch.long)
         end_token = torch.tensor([self.token_to_id["<EOS>"]], dtype=torch.long)
 
-        # Combine all parts into one tensor
-        result = torch.cat([start_token, tokenized, end_token, padding_tokens], dim=0)
+        # Combine all parts into one tensor (no padding - will be handled in collate_fn)
+        result = torch.cat([start_token, tokenized, end_token], dim=0)
 
         return result
 
