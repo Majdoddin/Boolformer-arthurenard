@@ -198,7 +198,7 @@ class LtnTransformer(LightningModule):
                 pts = pts_generator(config, formula.dim)
                 evaluations = formula.evaluate_pts(pts)
                 
-                regress_src, less_freq = self.input_vocab.tokenize_regression_mode(evaluations, config)
+                regress_src, less_freq = self.input_vocab.tokenize_eval(evaluations, config)
                 regress_tgt = self.output_vocab.tokenize_expr(formula.polish_expr, config, less_freq)
                 
                 valid_regression_src.append(regress_src)

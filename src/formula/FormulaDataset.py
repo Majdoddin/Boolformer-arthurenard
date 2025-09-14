@@ -139,7 +139,7 @@ class FormulaDataset(Dataset):
 
                 # Tokenize if formula remains valid
                 if formula.is_valid:
-                    tokenized_evaluations, less_freq_rslt = self.input_vocab.tokenize_regression_mode(
+                    tokenized_evaluations, less_freq_rslt = self.input_vocab.tokenize_eval(
                         evaluations, configFormula=self.config
                     )
                     tokenized_expression = self.output_vocab.tokenize_expr(

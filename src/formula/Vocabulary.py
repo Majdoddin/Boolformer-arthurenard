@@ -157,7 +157,7 @@ class Vocabulary:
     def tokenize_eval(self,
                      evaluations: torch.Tensor,
                      configFormula: ConfigFormula) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Tokenize evaluation results.
+        """Tokenize evaluation results with <regress> mode token.
 
         Args:
             evaluations: Tensor of evaluation results
@@ -165,12 +165,14 @@ class Vocabulary:
 
         Returns:
             Tuple containing:
-                - Tokenized evaluations tensor
+                - Tokenized evaluations tensor with <regress> prefix
                 - Less frequent result tensor
 
         Raises:
             ValueError: If tokenization fails
         """
+        # Prepend <regress> mode token
+        regress_token_id = self.token_to_id["<regress>"]
         # Tokenization for boolean points and values
         def pre_tokenize(value: float) -> str:
             return str(int(value))
@@ -243,8 +245,13 @@ class Vocabulary:
                 dimension_tokens = [self.token_to_id[pre_tokenize(value.item())] for value in variable]
                 variable_tokens.append(torch.tensor(dimension_tokens, dtype=torch.long))
 
-            # Stack tokens for each variable
-            eval_tokens_tensor = torch.stack(variable_tokens, dim=1)
+            # Add <regress> token as first column
+            regress_column = torch.full((len(filtered_points),), regress_token_id, dtype=torch.long)
+
+            # Stack <regress> column + variable tokens
+            #all_tokens = [regress_column] + variable_tokens
+            all_tokens = variable_tokens
+            eval_tokens_tensor = torch.stack(all_tokens, dim=1)
 
         nb_tok_eval, nb_tok_dim_eval = eval_tokens_tensor.shape
 
@@ -276,38 +283,6 @@ class Vocabulary:
         result = torch.cat([gen_token, padding_tokens], dim=0)
         return result
 
-    def tokenize_regression_mode(self, evaluations: torch.Tensor, configFormula: ConfigFormula) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Tokenize input for regression mode: <regress> + truth_table + <EOS> + padding.
-
-        Args:
-            evaluations: Tensor of evaluation results (truth table)
-            configFormula: Configuration for tokenization
-
-        Returns:
-            Tuple containing:
-                - Tokenized tensor for regression mode input
-                - Less frequent result tensor
-        """
-        regress_token = torch.tensor([self.token_to_id["<regress>"]], dtype=torch.long)
-        eos_token = torch.tensor([self.token_to_id["<EOS>"]], dtype=torch.long)
-
-        # Get tokenized evaluation data (reuse existing logic)
-        eval_tokenized, less_frequent_result = self.tokenize_eval(evaluations, configFormula)
-
-        # Remove existing padding from eval_tokenized to rebuild sequence
-        # Find the first PAD token to determine actual length
-        pad_id = self.PAD_id
-        eval_tokens_only = eval_tokenized[eval_tokenized != pad_id]
-
-        # Calculate padding needed
-        sequence_length = 1 + len(eval_tokens_only) + 1  # <regress> + eval_tokens + <EOS>
-        nb_pad_tokens = max(0, configFormula.NB_INPUT_TOKENS - sequence_length)
-        padding_tokens = torch.full((nb_pad_tokens,), pad_id, dtype=torch.long)
-
-        # Combine: [<regress>] + eval_tokens + [<EOS>] + [<PAD>...]
-        result = torch.cat([regress_token, eval_tokens_only, eos_token, padding_tokens], dim=0)
-
-        return result, less_frequent_result
 
 
 def create_both_vocabs(config: ConfigFormula, verbose: bool = False) -> Tuple[Vocabulary, Vocabulary]:
