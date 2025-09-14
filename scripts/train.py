@@ -3,11 +3,13 @@ import glob
 import torch
 from argparse import ArgumentParser
 from pytorch_lightning import Trainer
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import WandbLogger, CSVLogger
 from torch.utils.data import DataLoader
 from pathlib import Path
 import tempfile  # Import tempfile for temporary directory
 import logging
+import os
+import psutil
 from typing import Optional
 from dataclasses import dataclass
 
@@ -121,17 +123,30 @@ def main():
     callbacks.append(stop_callback)
 
     # Trainer Setup
-    trainer = Trainer(
-        default_root_dir=checkpoints_dir,       # Logs and checkpoints saved here
-        accumulate_grad_batches=config.acc_grad_batches,    # The number of batches to accumulate
-        logger=wandb_logger,                    # WandB logging
-        callbacks=callbacks,                    # Updated to include all callbacks
-        devices=[config.device],
-        max_steps=model.total_steps  # Add this to ensure training stops after decay
-    )
+    # Handle CPU vs GPU device configuration
+    if config.device == 1:  # CPU training
+        trainer = Trainer(
+            default_root_dir=checkpoints_dir,       # Logs and checkpoints saved here
+            accumulate_grad_batches=config.acc_grad_batches,    # The number of batches to accumulate
+            logger=CSVLogger(checkpoints_dir, name="train"),  # CSV logging instead of wandb_logger
+            callbacks=callbacks,                    # Updated to include all callbacks
+            accelerator="cpu",
+            devices=1,  # For CPU: single process (>1 causes memory allocation error with 1e12 dataset size)
+            max_steps=model.total_steps  # Add this to ensure training stops after decay
+        )
+    else:  # GPU training
+        trainer = Trainer(
+            default_root_dir=checkpoints_dir,       # Logs and checkpoints saved here
+            accumulate_grad_batches=config.acc_grad_batches,    # The number of batches to accumulate
+            logger=wandb_logger,                    # WandB logging
+            callbacks=callbacks,                    # Updated to include all callbacks
+            accelerator="gpu",
+            devices=[config.device],  # For GPU: list of device IDs
+            max_steps=model.total_steps  # Add this to ensure training stops after decay
+        )
 
     # Load the Training Dataset
-    train_dataset = FormulaDataset(input_vocab=model.input_vocab, 
+    train_dataset = FormulaDataset(input_vocab=model.input_vocab,
                                    output_vocab=model.output_vocab,
                                    configFormula=c_formula,
                                    )
