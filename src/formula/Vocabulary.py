@@ -55,8 +55,8 @@ class Vocabulary:
         """Get the size of the vocabulary."""
         return len(self.token_to_id)
 
-    def SOS_id(self, less_freq_rslt):
-        return self.token_to_id[f"<SOS_{less_freq_rslt}>"]
+    def SOS_id(self):
+        return self.token_to_id["<SOS>"]
 
 
     def input_auto_fill_vocabulary(self, configFormula: ConfigFormula):
@@ -105,15 +105,13 @@ class Vocabulary:
         for id, token in sorted_vocab[:end_index]:
             print(f"{id}: {token}")
 
-    def tokenize_expr(self, expression: List[str], configFormula: ConfigFormula, less_freq_rslt: int = None) -> torch.Tensor:
+    def tokenize_expr(self, expression: List[str], configFormula: ConfigFormula) -> torch.Tensor:
         """
         Tokenizes an expression by converting each token into its corresponding ID.
         Assumes all tokens in the expression are already in the vocabulary.
         """
-        # Prepare tensor for <SOS> token
-        if less_freq_rslt == None:
-           raise ValueError("less_freq_rslt is undefined in tokenize_expr")
-        start_token = torch.tensor([self.SOS_id(less_freq_rslt)], dtype=torch.long)
+        # Use simple SOS token
+        start_token = torch.tensor([self.token_to_id["<SOS>"]], dtype=torch.long)
 
         # Tokenize the expression
         token_ids = [self.token_to_id[token] for token in expression if isinstance(token, str)]

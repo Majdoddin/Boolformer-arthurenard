@@ -239,12 +239,12 @@ class LtnTransformer(LightningModule):
         formula_scores.sort(key=lambda x: (-x[1], len(x[0])))
         return formula_scores, nb_invalid
 
-    def predict(self, 
+    def predict(self,
                 c_formula: ConfigFormula,
-                list_evaluated_pts: List[torch.Tensor],
+                evaluated_pts: torch.Tensor,  # [batch_size, 2^n, n+1]
                 beam: int,
                 temperature: float = 0.7,
-                use_beam: bool = False) -> List[Tuple[List[Formula], List[float], int, int]]:
+                use_beam: bool = False) -> Tuple[List[Formula], List[float], int, int]:
         """Generate predictions for a batch of evaluation points.
         
         Args:
@@ -261,21 +261,10 @@ class LtnTransformer(LightningModule):
                 - Number of predictions made
                 - Number of invalid predictions
         """
-        batch_size = len(list_evaluated_pts)
-        batch_evaluated_pts = []
-        sos_ids_token = []
-
-        # Prepare input tensors
-        for evaluated_pts in list_evaluated_pts:
-            evaluated_pts_token, less_freq_rslt = self.input_vocab.tokenize_eval(
-                evaluated_pts, c_formula
-            )
-            batch_evaluated_pts.append(evaluated_pts_token)
-            sos_ids_token.append(self.output_vocab.SOS_id(less_freq_rslt))
-
-        # Stack tensors for batch processing
-        batch_evaluated_pts = torch.stack(batch_evaluated_pts).to(self.device)
-        sos_ids_token = torch.tensor(sos_ids_token, device=self.device).unsqueeze(1).unsqueeze(2)
+        # Use full truth table tokenization - no padding needed since length is fixed at 2^n
+        batch_size = evaluated_pts.size(0)
+        batch_evaluated_pts = evaluated_pts.long().to(self.device)  # Already has batch dimension
+        sos_ids_token = torch.full((batch_size, 1, 1), self.output_vocab.token_to_id["<SOS>"], device=self.device)
 
         # Generate predictions
         if use_beam:
@@ -291,7 +280,7 @@ class LtnTransformer(LightningModule):
         results = []
         for b in range(batch_size):
             pred_ids = batch_pred_ids[b]
-            pts = list_evaluated_pts[b]
+            pts = evaluated_pts[b]  # Get batch item from tensor
             formula_scores, nb_invalid = self.get_formula_scores(c_formula, pred_ids, pts)
 
             formulas = [item[0] for item in formula_scores]

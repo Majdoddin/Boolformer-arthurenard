@@ -139,11 +139,10 @@ class FormulaDataset(Dataset):
 
                 # Tokenize if formula remains valid
                 if formula.is_valid:
-                    tokenized_evaluations, less_freq_rslt = self.input_vocab.tokenize_eval(
-                        evaluations, configFormula=self.config
-                    )
+                    # Use full truth table tokenization (just convert to long)
+                    tokenized_evaluations = evaluations.long()
                     tokenized_expression = self.output_vocab.tokenize_expr(
-                        formula.polish_expr, configFormula=self.config, less_freq_rslt=less_freq_rslt
+                        formula.polish_expr, configFormula=self.config
                     )
 
                 if tokenized_evaluations is not None and tokenized_expression is not None:
