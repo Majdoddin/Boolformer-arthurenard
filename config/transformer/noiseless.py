@@ -8,7 +8,7 @@ DIM_FEEDFORWARD = 2048          # Feedforward dimension size
 DROPOUT = 0                     # Dropout rate
 ATTENTION_SIZE = 199            # = Expression size - 1
 INPUT_POINT_DIM_MAX = 10        # = Dimension max 
-NB_INPUT_TOKENS = 512           # = 2**(dim max -1)
+NB_INPUT_TOKENS = 1024          # = 2**dim_max (full truth table)
 
 # Learning rate and scheduling
 LEARNING_RATE = 0.0002          # Base learning rate
