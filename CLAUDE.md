@@ -3,6 +3,9 @@
 ## Overview
 Extended Boolformer with multitask learning capabilities for curriculum learning between formula generation and regression modes.
 
+## Current Work: Full Truth Table Embeddings
+Planning to replace current filtered tokenization with full truth table encoding using 11 position-specific learned embeddings (10 for variables + 1 for function value).
+
 ## Changes Made
 
 ### 1. Added Mode Tokens
