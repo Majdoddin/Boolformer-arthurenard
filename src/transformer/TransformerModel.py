@@ -40,11 +40,8 @@ class TransformerModel(nn.Transformer):
         self.d_model : int = config.D_MODEL
         self.attention_size : int = config.ATTENTION_SIZE
 
-        # Position-specific embeddings for full truth table approach
-        # 10 embeddings for variables + 1 embedding for function value
-        self.position_embeddings = nn.ModuleList([
-            nn.Embedding(2, self.d_model) for _ in range(11)  # 11 positions, each with 2 values {0,1}
-        ])
+        # Direct linear mapping from 11-dimensional input to d_model
+        self.input_projection = nn.Linear(11, self.d_model)
 
         self.tgt_input_emb = nn.Embedding(self.output_vocab_size, self.d_model)
         self.tgt_position_emb = nn.Embedding(self.attention_size, self.d_model)
@@ -64,14 +61,11 @@ class TransformerModel(nn.Transformer):
         """Forward pass of the transformer model."""
         B, T = tgt.shape
 
-        # Process source with position-specific embeddings
+        # Process source with direct linear projection
         # src shape: [batch_size, 2^n, 11] where 11 = 10 vars + 1 func_value
-        batch_size, seq_len, num_positions = src.shape
-
-        # Apply position-specific embeddings and sum them
-        src_emb = torch.zeros(batch_size, seq_len, self.d_model, device=src.device)
-        for pos in range(num_positions):
-            src_emb += self.position_embeddings[pos](src[:, :, pos])
+        # Convert {0,1} → {-1,+1} for better training dynamics
+        src_transformed = 2.0 * src.float() - 1.0  # [batch_size, 2^n, 11]
+        src_emb = self.input_projection(src_transformed)  # [batch_size, 2^n, d_model]
 
         pos_embed = torch.arange(0, T, device=tgt.device, dtype=torch.long)[None, :]
         tgt = self.tgt_input_emb(tgt) + self.tgt_position_emb(pos_embed)
