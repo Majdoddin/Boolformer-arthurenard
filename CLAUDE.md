@@ -4,7 +4,11 @@
 Extended Boolformer with multitask learning capabilities for curriculum learning between formula generation and regression modes.
 
 ## Current Work: Full Truth Table Embeddings
-Planning to replace current filtered tokenization with full truth table encoding using 11 position-specific learned embeddings (10 for variables + 1 for function value).
+**Completed**: Implemented full truth table approach with 11 position-specific embeddings
+- Replaced filtered tokenization (512 tokens) with complete truth table (1024 tokens)
+- 11 learned embeddings: 10 for variable positions + 1 for function value
+- Simplified SOS tokens, removed frequency-based complexity
+- Ready for training and evaluation on `feature/full-truth-table-embeddings` branch
 
 ## Changes Made
 
