@@ -68,6 +68,10 @@ class TransformerModel(nn.Transformer):
         # Convert vocabulary IDs to bipolar values: 0→0 (PAD), 1→-1, 2→+1
         src = torch.where(src == 0, 0.0,  # PAD → 0
                          torch.where(src == 1, -1.0, 1.0))  # 1→-1, 2→+1
+
+        # Create source padding mask (True for PAD positions where all values are 0)
+        src_key_padding_mask = (src == 0).all(dim=-1)  # Shape: [batch, seq_len]
+
         pos_embed = torch.arange(0, T, device=tgt.device, dtype=torch.long)[None, :]
 
         tgt = self.tgt_input_emb(tgt) + self.tgt_position_emb(pos_embed)
@@ -79,8 +83,9 @@ class TransformerModel(nn.Transformer):
         if self.tgt_mask is None or self.tgt_mask.size(0) != tgt.size(1):
             self.tgt_mask = self.get_mask(tgt.size(1))
 
-        memory = self.encoder(src)  # Encode source input
-        output = self.decoder(tgt, memory, tgt_mask=self.tgt_mask, tgt_is_causal=True)  # Decode to target
+        memory = self.encoder(src, src_key_padding_mask=src_key_padding_mask)  # Encode source input
+        output = self.decoder(tgt, memory, tgt_mask=self.tgt_mask, tgt_is_causal=True,
+                             memory_key_padding_mask=src_key_padding_mask)  # Decode to target
         final_output = self.output_layer(output)  # Final output layer produces (batch_size, tgt_length, vocab_size)
         return final_output    
 
