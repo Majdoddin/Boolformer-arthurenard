@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from src.formula import create_both_vocabs, FormulaDataset
 from src.transformer import LtnTransformer, create_callbacks, StopAfterDecay
+from src.transformer.helper_functions import dynamic_encoder_collate_fn
 from src.ConfigClasses import ConfigFormula, ConfigTransformer
 
 @dataclass
@@ -136,7 +137,14 @@ def main():
                                    configFormula=c_formula,
                                    )
 
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+    # Create collate function with PAD token ID for dynamic encoder padding
+    collate_fn = lambda batch: dynamic_encoder_collate_fn(batch, model.input_vocab.PAD_id)
+
+    train_loader = DataLoader(train_dataset,
+                             batch_size=config.batch_size,
+                             shuffle=False,
+                             num_workers=config.num_workers,
+                             collate_fn=collate_fn)
 
     # Start or resume training
     trainer.fit(model, train_dataloaders=train_loader, ckpt_path=ckpt_path)

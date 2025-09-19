@@ -1,4 +1,6 @@
 import torch
+from typing import List, Tuple
+from torch.nn.utils.rnn import pad_sequence
 from src.ConfigClasses import ConfigFormula
 
 def find_specific_id(tensor: torch.Tensor, target_id: int) -> int | None:
@@ -37,4 +39,25 @@ def get_number_of_candidates(config: ConfigFormula, tensor: torch.Tensor, pad_id
     if first_pad_index is None:
         return len(tensor) - result_size_adjustment
 
-    return first_pad_index 
+    return first_pad_index
+
+def dynamic_encoder_collate_fn(batch, input_pad_id: int):
+    """
+    Custom collate function for dynamic padding of encoder inputs only.
+
+    Args:
+        batch: List of (input, target, less_freq_rslt) tuples
+        input_pad_id: The ID of the PAD token for input vocabulary
+
+    Returns:
+        Tuple of (padded_inputs, targets, less_freq_results)
+    """
+    inputs, targets, less_freq_results = zip(*batch)
+
+    # Dynamically pad encoder inputs using pad_sequence
+    inputs_padded = pad_sequence(inputs, batch_first=True, padding_value=input_pad_id)
+
+    # Keep targets and less_freq_results unchanged
+    targets_batch = torch.stack(targets, dim=0)
+
+    return inputs_padded, targets_batch, less_freq_results

@@ -246,16 +246,8 @@ class Vocabulary:
             # Stack tokens for each variable
             eval_tokens_tensor = torch.stack(variable_tokens, dim=1)
 
-        nb_tok_eval, nb_tok_dim_eval = eval_tokens_tensor.shape
-
-        # Handle padding of the number of formulas
-        pad_formulas_len = final_len - nb_tok_eval # At most 2 ** (dim_max - 1) points to consider as we only take the less frqt rslt
-        pad_formulas_tensor = torch.full((pad_formulas_len, nb_tok_dim_eval), self.PAD_id, dtype=torch.long)
-
-        # Combine formulas tokens and padding tokens for the tokenized formulas tensor
-        full_tokenized_tensor = torch.cat([eval_tokens_tensor, pad_formulas_tensor], dim=0)
-
-        return full_tokenized_tensor, less_frequent_result
+        # Return without static padding - will be handled in collate_fn
+        return eval_tokens_tensor, less_frequent_result
 
 
 
