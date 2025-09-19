@@ -41,7 +41,6 @@ class TransformerModel(nn.Transformer):
         self.attention_size : int = config.ATTENTION_SIZE
 
         # Embedding layer using vocab sizes and dimensions from the config
-        self.src_input_emb = nn.Embedding(self.input_vocab_size, self.d_embed)
         self.tgt_input_emb = nn.Embedding(self.output_vocab_size, self.d_model)
         self.tgt_position_emb = nn.Embedding(self.attention_size, self.d_model)
 
@@ -51,11 +50,9 @@ class TransformerModel(nn.Transformer):
         # Output layer
         self.output_layer = nn.Linear(self.d_model, self.output_vocab_size)
 
-        # Calculate eval_size based on input_point_dim_max and d_embed from the config
-        self.eval_size = config.INPUT_POINT_DIM_MAX * self.d_embed
-
+        # Direct linear transformation from input dimensions to d_model
         self.dim_reduce = nn.Sequential(
-            nn.Linear(self.eval_size, self.d_model),
+            nn.Linear(config.INPUT_POINT_DIM_MAX, self.d_model),
             nn.SiLU()
         )
 
@@ -68,13 +65,15 @@ class TransformerModel(nn.Transformer):
         """Forward pass of the transformer model."""
         B, T = tgt.shape
 
-        src = self.src_input_emb(src)
+        # Convert vocabulary IDs to bipolar values: 0→0 (PAD), 1→-1, 2→+1
+        src = torch.where(src == 0, 0.0,  # PAD → 0
+                         torch.where(src == 1, -1.0, 1.0))  # 1→-1, 2→+1
         pos_embed = torch.arange(0, T, device=tgt.device, dtype=torch.long)[None, :]
 
         tgt = self.tgt_input_emb(tgt) + self.tgt_position_emb(pos_embed)
         tgt = tgt.to(torch.float32)
 
-        src = src.reshape(src.size(0), src.size(1), -1)
+        # src is already [batch, seq_len, 10] - no reshape needed
         src = self.dim_reduce(src)
 
         if self.tgt_mask is None or self.tgt_mask.size(0) != tgt.size(1):
