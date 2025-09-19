@@ -3,7 +3,7 @@ import glob
 import torch
 from argparse import ArgumentParser
 from pytorch_lightning import Trainer
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import WandbLogger, CSVLogger
 from torch.utils.data import DataLoader
 from pathlib import Path
 import tempfile  # Import tempfile for temporary directory
@@ -124,7 +124,7 @@ def main():
     trainer = Trainer(
         default_root_dir=checkpoints_dir,       # Logs and checkpoints saved here
         accumulate_grad_batches=config.acc_grad_batches,    # The number of batches to accumulate
-        logger=wandb_logger,                    # WandB logging
+        logger=CSVLogger(checkpoints_dir, name="train"),  # CSV logging
         callbacks=callbacks,                    # Updated to include all callbacks
         devices=[config.device],
         max_steps=model.total_steps  # Add this to ensure training stops after decay
