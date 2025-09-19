@@ -24,7 +24,7 @@ NOISY: bool = False
 
 # Special tokens
 INPUT_SPECIAL_TOKENS = ["<PAD>"]  # pad for the evaluation generation
-OUTPUT_SPECIAL_TOKENS = ["<SOS_0>", "<SOS_1>", "<EOS>", "<PAD>"]  # Start with less_frqt_rslt; pad for the formula generation; end
+OUTPUT_SPECIAL_TOKENS = ["<SOS>", "<EOS>", "<PAD>"]  # Start; end; pad for the formula generation
 
 
 ###################

@@ -55,10 +55,6 @@ class Vocabulary:
         """Get the size of the vocabulary."""
         return len(self.token_to_id)
 
-    def SOS_id(self, less_freq_rslt):
-        return self.token_to_id[f"<SOS_{less_freq_rslt}>"]
-
-
     def input_auto_fill_vocabulary(self, configFormula: ConfigFormula):
         """Populates the vocabulary with tokens from configuration settings."""
         # Appropriate tokens definitions
@@ -110,10 +106,18 @@ class Vocabulary:
         Tokenizes an expression by converting each token into its corresponding ID.
         Assumes all tokens in the expression are already in the vocabulary.
         """
-        # Prepare tensor for <SOS> token
-        if less_freq_rslt == None:
-           raise ValueError("less_freq_rslt is undefined in tokenize_expr")
-        start_token = torch.tensor([self.SOS_id(less_freq_rslt)], dtype=torch.long)
+        # Always use single <SOS> token (assume less_freq_rslt = 1)
+        start_token = torch.tensor([self.token_to_id["<SOS>"]], dtype=torch.long)
+
+        # Apply formula negation logic if less_freq_rslt = 0
+        if less_freq_rslt == 0:
+            # If formula starts with '~' (NOT), remove it; otherwise add '~'
+            if expression and expression[0] == '~':
+                # Remove the NOT operator
+                expression = expression[1:]
+            else:
+                # Add NOT operator at the beginning
+                expression = ['~'] + expression
 
         # Tokenize the expression
         token_ids = [self.token_to_id[token] for token in expression if isinstance(token, str)]

@@ -267,11 +267,11 @@ class LtnTransformer(LightningModule):
 
         # Prepare input tensors
         for evaluated_pts in list_evaluated_pts:
-            evaluated_pts_token, less_freq_rslt = self.input_vocab.tokenize_eval(
+            evaluated_pts_token, _ = self.input_vocab.tokenize_eval(
                 evaluated_pts, c_formula
             )
             batch_evaluated_pts.append(evaluated_pts_token)
-            sos_ids_token.append(self.output_vocab.SOS_id(less_freq_rslt))
+            sos_ids_token.append(self.output_vocab.token_to_id["<SOS>"])
 
         # Stack tensors for batch processing
         batch_evaluated_pts = torch.stack(batch_evaluated_pts).to(self.device)
