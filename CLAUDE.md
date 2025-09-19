@@ -3,9 +3,15 @@
 ## Overview
 Extended Boolformer with multitask learning capabilities for curriculum learning between formula generation and regression modes.
 
-## Current Work: Dynamic Padding Optimization
-**Completed**: Implemented dynamic encoder padding for training efficiency
-- Created `feature/dynamic-encoder-padding` branch with dynamic padding for encoder inputs
+**Note**: Updates should be technical and succinct. Implementation details can be found in git log and are not needed here.
+
+## Current Work: Single SOS Token with Formula Negation
+**Branch `feature/single-sos-with-not`**: Unified SOS token with preprocessing negation
+- Replace `<SOS_0>`, `<SOS_1>` with single `<SOS>` token
+- When `less_freq_rslt=0`: toggle NOT operator in `tokenize_expr()`
+- Model always assumes `less_freq_rslt=1`, formula negated during preprocessing
+
+**Branch `feature/dynamic-encoder-padding`**: Dynamic encoder padding optimization
 - Removed static padding from `tokenize_eval` method in Vocabulary.py
 - Added efficient `dynamic_encoder_collate_fn` using PyTorch's `pad_sequence`
 - Encoder sequences now padded to max length per batch instead of static 512 tokens
