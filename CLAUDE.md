@@ -3,13 +3,19 @@
 ## Overview
 Extended Boolformer with multitask learning capabilities for curriculum learning between formula generation and regression modes.
 
-## Current Work: Full Truth Table Embeddings
-**Completed**: Implemented full truth table approach with linear projection
+## Current Work: Dynamic Padding Optimization
+**Completed**: Implemented dynamic encoder padding for training efficiency
+- Created `feature/dynamic-encoder-padding` branch with dynamic padding for encoder inputs
+- Removed static padding from `tokenize_eval` method in Vocabulary.py
+- Added efficient `dynamic_encoder_collate_fn` using PyTorch's `pad_sequence`
+- Encoder sequences now padded to max length per batch instead of static 512 tokens
+- Complements existing `feature/dynamic-batch-padding` for decoder targets
+
+**Branch `feature/full-truth-table-embeddings`**: Full truth table approach with linear projection
 - Replaced filtered tokenization (512 tokens) with complete truth table (1024 tokens)
 - Single linear layer (11 → 512) instead of position-specific embeddings
 - {-1, +1} input encoding for better training dynamics (x = 2*b - 1)
 - Simplified SOS tokens, removed frequency-based complexity
-- Ready for training and evaluation on `feature/full-truth-table-embeddings` branch
 
 ## Changes Made
 
