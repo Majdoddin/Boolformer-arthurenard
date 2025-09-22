@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from ..ConfigClasses import ConfigTransformer
 from ..formula import Vocabulary
+from .mobius_transform import mobius_transform, select_dominant_coefficients
 
 
 def create_mask(size):
@@ -59,6 +60,10 @@ class TransformerModel(nn.Transformer):
             nn.SiLU()
         )
 
+        # New layers for Möbius transform coefficients
+        self.coeff_linear = nn.Linear(config.INPUT_POINT_DIM_MAX + 1, self.d_model, bias=True)  # +1 for coefficient value
+        self.e_type_embed = nn.Embedding(2, self.d_model)  # 0="truth_table", 1="coefficient"
+
         self.tgt_mask = None
 
     def get_mask(self, size):
@@ -76,6 +81,30 @@ class TransformerModel(nn.Transformer):
 
         src = src.reshape(src.size(0), src.size(1), -1)
         src = self.dim_reduce(src)
+
+        # Add type embedding for truth table
+        src += self.e_type_embed(torch.zeros(B, src.size(1), dtype=torch.long, device=src.device))
+
+        # Compute Möbius coefficients for each sample in batch
+        coeff_features_list = []
+        for b in range(B):
+            # Extract function values from original input (before embedding)
+            original_src = self.src_input_emb.weight.data[0]  # This needs proper extraction
+            # TODO: Need to properly extract function values from truth table
+            # For now, placeholder - this needs to be implemented based on data structure
+
+            # Compute Möbius coefficients
+            # coeffs = mobius_transform(f_values)
+            # coeff_input = select_dominant_coefficients(coeffs)
+            # sample_coeff_features = self.coeff_linear(coeff_input)
+            # coeff_features_list.append(sample_coeff_features)
+
+        # For now, create empty coefficient features to maintain structure
+        # This will be replaced with actual implementation
+        coeff_features = torch.zeros(B, 0, self.d_model, device=src.device)
+
+        # Concatenate truth table and coefficient features
+        src = torch.cat([src, coeff_features], dim=1)
 
         if self.tgt_mask is None or self.tgt_mask.size(0) != tgt.size(1):
             self.tgt_mask = self.get_mask(tgt.size(1))
