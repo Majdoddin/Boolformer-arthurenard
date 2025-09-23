@@ -5,7 +5,7 @@ def mobius_transform(f: torch.Tensor) -> torch.Tensor:
     """
     Fast Möbius transform on boolean lattice using SOS DP.
 
-    Computes μ(S) = sum over all subsets T of S: (-1)^|S\T| * f(T)
+    Computes μ(S) = sum over all subsets T of S: (-1)^|S\\T| * f(T)
 
     Args:
         f: Function values for all 2^n subsets [2^n]
@@ -23,61 +23,59 @@ def mobius_transform(f: torch.Tensor) -> torch.Tensor:
 
     return mu
 
-def select_dominant_coefficients(coeffs: torch.Tensor, threshold: float = 0.1,
-                                min_count: int = 8, max_count: int = 64) -> torch.Tensor:
-    """
-    Select dominant Möbius coefficients and create scaled input tensor.
+def select_dominant_coefficients(mu: torch.Tensor, evaluations: torch.Tensor, min_count: int = 8, max_count: int = 64, threshold: float = 0.1) -> torch.Tensor:
+    """Select dominant Möbius coefficients and create input tensor.
 
     Args:
-        coeffs: All Möbius coefficients [2^n]
-        threshold: Minimum normalized score threshold
-        min_count: Minimum number of coefficients to include (including empty set)
-        max_count: Maximum number of coefficients to include (including empty set)
+        mu: Möbius coefficients tensor of shape [2^n]
+        evaluations: Truth table tensor of shape [2^n, n+1] where last column is function values
+        min_count: Minimum number of coefficients to select (including empty set)
+        max_count: Maximum number of coefficients to select
+        threshold: Threshold for normalized magnitude filtering
 
     Returns:
         coeff_input: Tensor [K, n+1] with subset encodings and scaled coefficients
     """
-    n_vars = int(torch.log2(torch.tensor(len(coeffs))).item())
+    n = evaluations.shape[1] - 1  # Number of variables (excluding function value column)
 
-    # Compute normalized scores for all non-empty subsets
-    candidates = []
-    for subset in range(1, len(coeffs)):
-        subset_size = bin(subset).count('1')  # Count number of 1s = |S|
-        normalized_score = abs(coeffs[subset].item()) / (2 ** (subset_size / 2))
-        candidates.append((normalized_score, subset))
+    # Calculate normalized magnitudes |a_S| / 2^{|S|/2}
+    subset_sizes = torch.tensor([bin(i).count('1') for i in range(len(mu))], dtype=torch.float32)
+    normalized_magnitudes = torch.abs(mu) / (2.0 ** (subset_sizes / 2))
 
-    # Sort candidates by score (descending)
-    candidates.sort(reverse=True)
+    # Sort by normalized magnitude (excluding empty set which is always included)
+    sorted_indices = torch.argsort(normalized_magnitudes[1:], descending=True) + 1
 
-    # Filter: keep those above threshold, but at least min_count-1 (reserve 1 for empty set)
-    min_needed = min_count - 1  # -1 for empty set
-    selected_indices = [0]  # Always include empty set
+    # Take top max_count candidates
+    candidates = sorted_indices[:max_count-1]  # -1 for empty set
 
-    for i, (score, subset) in enumerate(candidates[:max_count-1]):
-        if score > threshold or i < min_needed:
-            selected_indices.append(subset)
+    # Filter by threshold and ensure minimum count
+    above_threshold = normalized_magnitudes[candidates] >= threshold
+    selected_candidates = candidates[above_threshold]
 
-    # Create final input tensor with subset encodings and scaled coefficients
-    coeff_input = []
+    # Ensure we have at least min_count-1 candidates (excluding empty set)
+    if len(selected_candidates) < min_count - 1:
+        selected_candidates = candidates[:min_count-1]
 
-    for subset in selected_indices:
-        # Convert subset index to binary encoding
-        encoding = []
-        size = 0
-        for i in range(n_vars):
-            if subset & (1 << i):
-                encoding.append(1.0)  # Variable is in subset
-                size += 1
-            else:
-                encoding.append(-1.0)  # Variable is not in subset
+    # Always include empty set (index 0) at the beginning
+    selected_indices = torch.cat([torch.tensor([0]), selected_candidates])
 
-        # Scale coefficient by 2^{|S|-1}
-        scaled_coeff = coeffs[subset].item()
-        if size > 0:  # Don't scale empty set
-            scaled_coeff /= (2 ** (size - 1))
+    # Scale coefficients by a_S / 2^{|S|-1}
+    selected_sizes = subset_sizes[selected_indices]
+    scaling_factors = 1.0 / (2.0 ** torch.clamp(selected_sizes - 1, min=0))  # Clamp to avoid division by 2^{-1}
+    scaled_coefficients = mu[selected_indices] * scaling_factors
 
-        # Combine encoding with scaled coefficient
-        row = encoding + [scaled_coeff]
-        coeff_input.append(row)
+    # Extract encodings directly from truth table rows (convert 0.0→-1.0, 1.0→+1.0)
+    encodings = 2 * evaluations[selected_indices, :-1] - 1
 
-    return torch.tensor(coeff_input, dtype=torch.float32)
+    # Combine encodings with scaled coefficients
+    coeff_input = torch.cat([encodings, scaled_coefficients.unsqueeze(1)], dim=1)
+
+    # TODO: Implement dynamic padding in DataLoader collate function
+    # For now, pad to max_count to ensure consistent size across batches
+    current_count = coeff_input.shape[0]
+    if current_count < max_count:
+        padding_rows = max_count - current_count
+        padding = torch.zeros(padding_rows, coeff_input.shape[1], dtype=coeff_input.dtype)
+        coeff_input = torch.cat([coeff_input, padding], dim=0)
+
+    return coeff_input

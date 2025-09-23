@@ -164,12 +164,12 @@ class LtnTransformer(LightningModule):
         Returns:
             Loss tensor
         """
-        src, tgt = batch
+        src, tgt, coeff = batch
 
         tgt_input = tgt[:, :-1]  # Excluding the last token for input
         tgt_output = tgt[:, 1:]  # Target excludes the first token
 
-        output = self.model(src, tgt_input)
+        output = self.model(src, coeff, tgt_input)
 
         # Log the learning rate
         lr = self.trainer.optimizers[0].param_groups[0]['lr']

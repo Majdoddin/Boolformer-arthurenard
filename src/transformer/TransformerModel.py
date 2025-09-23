@@ -69,7 +69,7 @@ class TransformerModel(nn.Transformer):
     def get_mask(self, size):
         return self.mask[:size][:size]
 
-    def forward(self, src, tgt):
+    def forward(self, src, mu, tgt):
         """Forward pass of the transformer model."""
         B, T = tgt.shape
 
@@ -85,26 +85,11 @@ class TransformerModel(nn.Transformer):
         # Add type embedding for truth table
         src += self.e_type_embed(torch.zeros(B, src.size(1), dtype=torch.long, device=src.device))
 
-        # Compute Möbius coefficients for each sample in batch
-        coeff_features_list = []
-        for b in range(B):
-            # Extract function values from original input (before embedding)
-            original_src = self.src_input_emb.weight.data[0]  # This needs proper extraction
-            # TODO: Need to properly extract function values from truth table
-            # For now, placeholder - this needs to be implemented based on data structure
-
-            # Compute Möbius coefficients
-            # coeffs = mobius_transform(f_values)
-            # coeff_input = select_dominant_coefficients(coeffs)
-            # sample_coeff_features = self.coeff_linear(coeff_input)
-            # coeff_features_list.append(sample_coeff_features)
-
-        # For now, create empty coefficient features to maintain structure
-        # This will be replaced with actual implementation
-        coeff_features = torch.zeros(B, 0, self.d_model, device=src.device)
-
-        # Concatenate truth table and coefficient features
-        src = torch.cat([src, coeff_features], dim=1)
+        # Process Möbius coefficients if provided
+        if mu is not None:
+            mu = self.coeff_linear(mu)
+            mu += self.e_type_embed(torch.ones(B, mu.size(1), dtype=torch.long, device=mu.device))
+            src = torch.cat([src, mu], dim=1)
 
         if self.tgt_mask is None or self.tgt_mask.size(0) != tgt.size(1):
             self.tgt_mask = self.get_mask(tgt.size(1))

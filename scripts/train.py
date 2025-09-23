@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
+from torch.utils.data.dataloader import default_collate
 from pathlib import Path
 import tempfile  # Import tempfile for temporary directory
 import logging
