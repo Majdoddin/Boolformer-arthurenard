@@ -67,76 +67,67 @@ if [ $START_STEP -le 6 ]; then
     which git || (apt-get update && apt-get install -y git)
 
     # Configure git as user
-    su - $USER -c '
-        # Configure git with user credentials
-        git config --global user.name "Ruhollah Majdoddin"
-        git config --global user.email "r.majdodin@gmail.com"
+    git config --global user.name "Ruhollah Majdoddin"
+    git config --global user.email "r.majdodin@gmail.com"
 
-        # Add GitHub SSH host key
-        ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || (mkdir -p ~/.ssh && ssh-keyscan -H github.com >> ~/.ssh/known_hosts)
-    '
+    # Add GitHub SSH host key
+    ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || (mkdir -p ~/.ssh && ssh-keyscan -H github.com >> ~/.ssh/known_hosts)
 fi
 
 # Step 7: Install Claude Code (as user ruhollah)
 if [ $START_STEP -le 7 ]; then
     echo "Step 7: Installing Claude Code..."
-    su - $USER -c '
-        # Create local lib directory
-        mkdir -p ~/.local/lib
-        cd ~/.local/lib
+    # Create local lib directory
+    mkdir -p ~/.local/lib
+    cd ~/.local/lib
 
-        # Initialize npm and install Claude Code
-        npm init -y
-        npm install @anthropic-ai/claude-code
+    # Initialize npm and install Claude Code
+    npm init -y
+    npm install @anthropic-ai/claude-code
 
-        # Add to PATH
-        echo "export PATH=~/.local/lib/node_modules/.bin:\$PATH" >> ~/.bashrc
-    '
+    # Add to PATH
+    echo "export PATH=~/.local/lib/node_modules/.bin:\$PATH" >> ~/.bashrc
 fi
 
 # Step 8: Clone Boolformer repository (as user)
 if [ $START_STEP -le 8 ]; then
     echo "Step 8: Cloning Boolformer repository..."
-    su - $USER -c '
-        # Clone Boolformer repository from majdoddin
-        git clone https://github.com/Majdoddin/Boolformer-arthurenard.git ~/Boolformer
-        cd ~/Boolformer
+    # Clone Boolformer repository from majdoddin
+    git clone https://github.com/Majdoddin/Boolformer-arthurenard.git ~/Boolformer
+    cd ~/Boolformer
 
-        # Fetch all branches
-        git fetch --all
+    # Fetch all branches
+    git fetch --all
 
-        # Create local tracking branches for all remote branches
-        echo "Creating local tracking branches..."
-        git branch -r | grep -v '\->' | while read remote; do
-            branch_name="${remote#origin/}"
-            echo "Creating local branch: $branch_name"
-            git branch --track "$branch_name" "$remote" 2>/dev/null || echo "Branch $branch_name already exists"
-        done
+    # Create local tracking branches for all remote branches
+    echo "Creating local tracking branches..."
+    for remote in $(git branch -r | grep -v "\\->"); do
+        branch_name="${remote#origin/}"
+        echo "Creating local branch: $branch_name"
+        git branch --track "$branch_name" "$remote" 2>/dev/null || echo "Branch $branch_name already exists"
+    done
 
-        # List all local branches
-        echo "Available local branches:"
-        git branch
-    '
+    # List all local branches
+    echo "Available local branches:"
+    git branch
 fi
 
 # Step 9: Set up Python environment with UV (as user)
 if [ $START_STEP -le 9 ]; then
     echo "Step 9: Setting up Python environment..."
-    su - $USER -c '
-        cd ~/Boolformer
+    cd ~/Boolformer
 
-        # Install UV
-        pip install uv
+    # Install UV
+    pip install uv
 
-        # Create virtual environment
-        uv venv
+    # Create virtual environment
+    uv venv
 
-        # Install dependencies
-        uv pip install -r requirements.txt
+    # Install dependencies
+    uv pip install -r requirements.txt
 
-        echo "Python environment setup complete!"
-        echo "To activate: cd ~/Boolformer && source .venv/bin/activate"
-    '
+    echo "Python environment setup complete!"
+    echo "To activate: cd ~/Boolformer && source .venv/bin/activate"
 fi
 
 echo "✅ Setup completed successfully!"
