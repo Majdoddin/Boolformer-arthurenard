@@ -52,7 +52,7 @@ def dynamic_encoder_collate_fn(batch, input_pad_id: int):
     Returns:
         Tuple of (padded_inputs, targets, less_freq_results)
     """
-    inputs, targets, less_freq_results = zip(*batch)
+    inputs, targets = zip(*batch)
 
     # Dynamically pad encoder inputs using pad_sequence
     inputs_padded = pad_sequence(inputs, batch_first=True, padding_value=input_pad_id)
@@ -60,4 +60,4 @@ def dynamic_encoder_collate_fn(batch, input_pad_id: int):
     # Keep targets and less_freq_results unchanged
     targets_batch = torch.stack(targets, dim=0)
 
-    return inputs_padded, targets_batch, less_freq_results
+    return inputs_padded, targets_batch
