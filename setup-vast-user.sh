@@ -93,8 +93,11 @@ fi
 if [ $START_STEP -le 8 ]; then
     echo "Step 8: Cloning Boolformer repository..."
     # Clone Boolformer repository from majdoddin
-    git clone https://github.com/Majdoddin/Boolformer-arthurenard.git ~/Boolformer
+    git clone -o majdoddin https://github.com/Majdoddin/Boolformer-arthurenard.git ~/Boolformer
     cd ~/Boolformer
+
+    # Add upstream remote
+    git remote add upstream https://github.com/arthurenard/Boolformer.git
 
     # Fetch all branches
     git fetch --all
@@ -102,7 +105,7 @@ if [ $START_STEP -le 8 ]; then
     # Create local tracking branches for all remote branches
     echo "Creating local tracking branches..."
     for remote in $(git branch -r | grep -v "\\->"); do
-        branch_name="${remote#origin/}"
+        branch_name="${remote#majdoddin/}"
         echo "Creating local branch: $branch_name"
         git branch --track "$branch_name" "$remote" 2>/dev/null || echo "Branch $branch_name already exists"
     done
