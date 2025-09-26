@@ -114,7 +114,6 @@ def canonicalize_boolean_expr(expr):
     else:
         return expr  # Unknown expression type, return as-is
 
-yy = 0
 class Formula:
     """A class representing a boolean formula with evaluation capabilities.
 
@@ -141,7 +140,6 @@ class Formula:
         Raises:
             ValueError: If neither tree nor math_expr is provided
         """
-        global yy
         self.is_valid = True
 
         # Define the class attribute if undefined
@@ -166,8 +164,6 @@ class Formula:
             self.math_expr = canonicalize_boolean_expr(self.math_expr)
             # Update polish representation with canonical form
             self.polish_expr = expr_to_polish(self.math_expr, self.config)
-        yy += 1
-        print (yy)
 
         # Check the validity
         if self.dim == 0 or len(self.polish_expr) < 1 or len(self.polish_expr) > config.EXPR_SIZE_MAX - 2:  # The SOS and EOS are included
@@ -256,6 +252,8 @@ class Formula:
 
             if new_math_expr != current_math_expr:
                 counter += 1
+                if counter > 1:
+                    print(counter)
                 if counter > 100:
                     self.is_valid = False
                     raise ValueError("Infinite loop in polish simplify!!")
