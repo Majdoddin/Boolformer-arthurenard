@@ -15,10 +15,9 @@ def create_mask(size):
 
 import torch.nn as nn
 
-class TransformerModel(nn.Module):
+class TransformerModel(EncoderDecoderModel):
     def __init__(self, config: ConfigTransformer, input_vocab: Vocabulary, output_vocab: Vocabulary):
         """Initialize the Transformer model using the configuration provided in ConfigTransformer."""
-        super().__init__()
 
         # Create encoder config using current config values
         encoder_config = BertConfig(
@@ -39,11 +38,15 @@ class TransformerModel(nn.Module):
             n_head=config.NUM_HEADS,
             resid_pdrop=config.DROPOUT,
             attn_pdrop=config.DROPOUT,
+            is_decoder=True,  # Enable decoder mode for encoder-decoder architecture
+            add_cross_attention=True,  # Enable cross-attention to encoder
         )
 
-        # Create encoder-decoder model
+        # Create encoder-decoder model config
         model_config = EncoderDecoderConfig.from_encoder_decoder_configs(encoder_config, decoder_config)
-        self.transformer = EncoderDecoderModel(model_config)
+
+        # Initialize parent EncoderDecoderModel
+        super().__init__(model_config)
 
         # Access attributes from the ConfigTransformer instance
         self.input_vocab : Vocabulary = input_vocab
@@ -97,11 +100,13 @@ class TransformerModel(nn.Module):
         if self.tgt_mask is None or self.tgt_mask.size(0) != tgt.size(1):
             self.tgt_mask = self.get_mask(tgt.size(1))
 
-        # Use HuggingFace EncoderDecoderModel
-        outputs = self.transformer(
-            inputs_embeds=src,  # Encoder input embeddings
-            decoder_inputs_embeds=tgt,
-            decoder_attention_mask=self.tgt_mask
+        # Use HuggingFace EncoderDecoderModel (self is the model)
+        # Note: HF models do not add positional embeddings when using inputs_embeds/decoder_inputs_embeds
+        # Our embeddings (src, tgt) already include positional information from preprocessing above
+        outputs = super().forward(
+            inputs_embeds=src,  # Encoder input embeddings (includes positional info from dim_reduce)
+            decoder_inputs_embeds=tgt,  # Decoder input embeddings (includes positional embeddings)
+            # Let HF handle causal masking automatically (is_decoder=True enables this)
         )
         return outputs.logits    
 
