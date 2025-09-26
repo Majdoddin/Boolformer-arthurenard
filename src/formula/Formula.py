@@ -8,11 +8,116 @@ from sklearn.metrics import f1_score
 
 from ..ConfigClasses import ConfigFormula
 from .generation_formula import tree_to_expr, get_alternative_tree, expr_to_tree
+import boolean
 from ..general_functions import expr_to_polish, polish_to_expr
 
+
+def get_structural_signature(expr):
+    """
+    Generate a structural signature for a boolean expression that is variable-oblivious.
+
+    Args:
+        expr: Boolean expression (boolean.Symbol, boolean.AND, boolean.OR, boolean.NOT)
+
+    Returns:
+        Tuple representing the structural signature
+    """
+    if isinstance(expr, boolean.Symbol):
+        return (0,)  # LITERAL
+    elif isinstance(expr, boolean.NOT):
+        return (1, get_structural_signature(expr.args[0]))  # NOT
+    elif isinstance(expr, boolean.AND):
+        # Sort child signatures for commutative operator
+        child_sigs = [get_structural_signature(arg) for arg in expr.args]
+        return (2, tuple(sorted(child_sigs)))  # AND
+    elif isinstance(expr, boolean.OR):
+        # Sort child signatures for commutative operator
+        child_sigs = [get_structural_signature(arg) for arg in expr.args]
+        return (3, tuple(sorted(child_sigs)))  # OR
+    else:
+        return (0,)  # Unknown, treat as literal
+
+
+def get_variable_tuple(expr):
+    """Extract variables from expression as tuple of integers in traversal order."""
+    if isinstance(expr, boolean.Symbol):
+        # Extract number from symbol name (e.g., "x11" -> 11)
+        symbol_name = str(expr)
+        assert symbol_name.startswith('x'), f"Symbol must start with 'x': {symbol_name}"
+        return (int(symbol_name[1:]),)
+    elif isinstance(expr, boolean.NOT):
+        return get_variable_tuple(expr.args[0])
+    elif isinstance(expr, (boolean.AND, boolean.OR)):
+        all_vars = []
+        for arg in expr.args:
+            all_vars.extend(get_variable_tuple(arg))
+        return tuple(all_vars)  # Preserve order, no sorting
+
+    raise ValueError(f"Unsupported expression type: {type(expr)}")
+
+
+def canonicalize_boolean_expr(expr):
+    """
+    Canonicalize a boolean expression by ordering children of commutative operators
+    and applying idempotence laws.
+
+    Args:
+        expr: Boolean expression to canonicalize
+
+    Returns:
+        Canonicalized boolean expression
+    """
+    assert len(expr.args) <= 2, f"Expected binary operator, got {len(expr.args)} args: {expr}"
+
+    if isinstance(expr, boolean.Symbol):
+        return expr  # Literals are already canonical
+
+    elif isinstance(expr, boolean.NOT):
+        # Recursively canonicalize the argument
+        canonical_arg = canonicalize_boolean_expr(expr.args[0])
+        return boolean.NOT(canonical_arg)
+
+    elif isinstance(expr, (boolean.AND, boolean.OR)):
+        # Recursively canonicalize children
+        canonical_children = [canonicalize_boolean_expr(arg) for arg in expr.args]
+
+        # Check for idempotence (identical children)
+        child1_vars = get_variable_tuple(canonical_children[0])
+        child1_sig = get_structural_signature(canonical_children[0])
+        child2_vars = get_variable_tuple(canonical_children[1])
+        child2_sig = get_structural_signature(canonical_children[1])
+        if child1_sig == child2_sig and child1_vars == child2_vars:
+            # Apply idempotence: A AND A -> A, A OR A -> A
+            return canonical_children[0]
+
+        # Create child data for sorting
+        child_data = []
+        for child in canonical_children:
+            child_data.append({
+                "expr": child,
+                "signature": get_structural_signature(child),
+                "variables": get_variable_tuple(child)
+            })
+
+        # Sort by signature (primary) and variables (secondary)
+        child_data.sort(key=lambda c: (c["signature"], c["variables"]))
+
+        # Extract sorted children
+        sorted_children = [c["expr"] for c in child_data]
+
+        # Create new expression with sorted children
+        if isinstance(expr, boolean.AND):
+            return boolean.AND(*sorted_children)
+        else:  # boolean.OR
+            return boolean.OR(*sorted_children)
+
+    else:
+        return expr  # Unknown expression type, return as-is
+
+yy = 0
 class Formula:
     """A class representing a boolean formula with evaluation capabilities.
-    
+
     Attributes:
         config (ConfigFormula): Configuration for formula generation and evaluation
         is_valid (bool): Whether the formula is valid
@@ -23,18 +128,20 @@ class Formula:
     # class attributes
     config = None
 
-    def __init__(self, config: ConfigFormula, tree: Any = None, math_expr: Any = None, simplify: bool = True):
+    def __init__(self, config: ConfigFormula, tree: Any = None, math_expr: Any = None, simplify: bool = True, canonicalize: bool = True):
         """Initialize a Formula instance.
-        
+
         Args:
             config: Configuration object for the formula
             tree: Tree representation of the formula
             math_expr: Mathematical expression of the formula
             simplify: Whether to simplify the formula after creation
-        
+            canonicalize: Whether to canonicalize the formula after simplification
+
         Raises:
             ValueError: If neither tree nor math_expr is provided
         """
+        global yy
         self.is_valid = True
 
         # Define the class attribute if undefined
@@ -43,32 +150,40 @@ class Formula:
 
         # Create the mathematical expression
         if math_expr is not None:
-            self.math_expr = math_expr 
+            self.math_expr = math_expr
         elif tree is not None:
             self.math_expr = tree_to_expr(tree, self.config)
         else:
             raise ValueError("Math_expr is not the right type or tree does not exist")
-        
+
         # Create the Polish expression
         self.polish_expr = expr_to_polish(self.math_expr, self.config)
         if simplify:
             self.loop_polish_simplify()
 
+        if canonicalize:
+            # Canonicalize the simplified expression
+            self.math_expr = canonicalize_boolean_expr(self.math_expr)
+            # Update polish representation with canonical form
+            self.polish_expr = expr_to_polish(self.math_expr, self.config)
+        yy += 1
+        print (yy)
+
         # Check the validity
         if self.dim == 0 or len(self.polish_expr) < 1 or len(self.polish_expr) > config.EXPR_SIZE_MAX - 2:  # The SOS and EOS are included
             # Formula is invalid
-            self.is_valid = False  
+            self.is_valid = False
 
 
     def __len__(self):
         if self.is_valid is False:
             return 0
         return len(self.polish_expr)
-    
+
     @property
     def dim(self):
         return len(set(self.math_expr.get_symbols()))
-    
+
     def alternative(self):
         tree = expr_to_tree(self.math_expr)
         alternative_tree = get_alternative_tree(tree)
@@ -76,14 +191,14 @@ class Formula:
         alternative_expr = tree_to_expr(alternative_tree, self.config)
 
         return Formula(self.config, math_expr=alternative_expr, simplify=False)
-   
+
 
     def score(self, tgt_evaluations: torch.Tensor) -> float:
         """Calculate the score of the formula against target evaluations.
-                
+
         Args:
             tgt_evaluations: Target evaluations tensor
-            
+
         Returns:
             float: score between 0 and 1
         """
@@ -106,10 +221,10 @@ class Formula:
 
     def f1_score(self, tgt_evaluations: torch.Tensor) -> float:
         """Calculate the F1 score between formula predictions and target evaluations.
-        
+
         Args:
             tgt_evaluations: Target evaluations tensor
-            
+
         Returns:
             float: F1 score between 0 and 1
         """
@@ -144,10 +259,12 @@ class Formula:
                 if counter > 100:
                     self.is_valid = False
                     raise ValueError("Infinite loop in polish simplify!!")
-                
+
                 self.math_expr = new_math_expr
                 self.polish_expr = expr_to_polish(new_math_expr, self.config)
             else:
+                self.polish_expr = expr_to_polish(new_math_expr, self.config)
+                self.math_expr = polish_to_expr(self.polish_expr, self.config)
                 not_converged = False
 
 
@@ -166,15 +283,15 @@ class Formula:
             # Check if the expression is a symbol (e.g., x1, x2)
             if isinstance(expr, boolean.Symbol):
                 return values[str(expr)]
-            
+
             # If it's an AND operation
             if expr.operator == '&':
                 return all(evaluate_expr(arg, values) for arg in expr.args)
-            
+
             # If it's an OR operation
             if expr.operator == '|':
                 return any(evaluate_expr(arg, values) for arg in expr.args)
-            
+
             # If it's a NOT operation
             if expr.operator == '~':
                 return not evaluate_expr(expr.args[0], values)
