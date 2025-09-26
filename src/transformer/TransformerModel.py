@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from transformers import EncoderDecoderModel, EncoderDecoderConfig, BertConfig, GPT2Config
 
 from ..ConfigClasses import ConfigTransformer
 from ..formula import Vocabulary
@@ -14,19 +15,35 @@ def create_mask(size):
 
 import torch.nn as nn
 
-class TransformerModel(nn.Transformer):
+class TransformerModel(nn.Module):
     def __init__(self, config: ConfigTransformer, input_vocab: Vocabulary, output_vocab: Vocabulary):
         """Initialize the Transformer model using the configuration provided in ConfigTransformer."""
+        super().__init__()
 
-        # Call the parent nn.Transformer initializer using values from the config
-        super().__init__(d_model=config.D_MODEL,
-                         nhead=config.NUM_HEADS,
-                         num_encoder_layers=config.NUM_ENCODER_LAYERS,
-                         num_decoder_layers=config.NUM_DECODER_LAYERS,
-                         dim_feedforward=config.DIM_FEEDFORWARD,
-                         dropout=config.DROPOUT,
-                         norm_first=True, 
-                         batch_first=True)
+        # Create encoder config using current config values
+        encoder_config = BertConfig(
+            vocab_size=len(input_vocab),
+            hidden_size=config.D_MODEL,
+            num_hidden_layers=config.NUM_ENCODER_LAYERS,
+            num_attention_heads=config.NUM_HEADS,
+            intermediate_size=config.DIM_FEEDFORWARD,
+            hidden_dropout_prob=config.DROPOUT,
+            attention_probs_dropout_prob=config.DROPOUT,
+        )
+
+        # Create decoder config using current config values
+        decoder_config = GPT2Config(
+            vocab_size=len(output_vocab),
+            n_embd=config.D_MODEL,
+            n_layer=config.NUM_DECODER_LAYERS,
+            n_head=config.NUM_HEADS,
+            resid_pdrop=config.DROPOUT,
+            attn_pdrop=config.DROPOUT,
+        )
+
+        # Create encoder-decoder model
+        model_config = EncoderDecoderConfig.from_encoder_decoder_configs(encoder_config, decoder_config)
+        self.transformer = EncoderDecoderModel(model_config)
 
         # Access attributes from the ConfigTransformer instance
         self.input_vocab : Vocabulary = input_vocab
@@ -80,10 +97,13 @@ class TransformerModel(nn.Transformer):
         if self.tgt_mask is None or self.tgt_mask.size(0) != tgt.size(1):
             self.tgt_mask = self.get_mask(tgt.size(1))
 
-        memory = self.encoder(src)  # Encode source input
-        output = self.decoder(tgt, memory, tgt_mask=self.tgt_mask, tgt_is_causal=True)  # Decode to target
-        final_output = self.output_layer(output)  # Final output layer produces (batch_size, tgt_length, vocab_size)
-        return final_output    
+        # Use HuggingFace EncoderDecoderModel
+        outputs = self.transformer(
+            inputs_embeds=src,  # Encoder input embeddings
+            decoder_inputs_embeds=tgt,
+            decoder_attention_mask=self.tgt_mask
+        )
+        return outputs.logits    
 
 
     @torch.no_grad()

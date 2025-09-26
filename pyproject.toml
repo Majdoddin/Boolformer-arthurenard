@@ -18,7 +18,8 @@ dependencies = [
     "boolean.py",
     "timeout_decorator",
     "wandb",
-    "protobuf"
+    "protobuf",
+    "transformers"
 ]
 
 [project.optional-dependencies]
