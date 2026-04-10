@@ -200,11 +200,32 @@ OOD w.r.t. Mθ) but uses the BFGS-fitted version for scoring. Two-track design.
 
 ### SRBench headline numbers (Table 7.2 / Fig 7.2)
 
-- Black-box datasets: median test R² = 0.846, expr size 41. Competitive with
-  GP-GOMEA (SOTA GP).
-- Feynman datasets: 80% solved at R² ≥ 0.99, expr size 33.
-- Pareto-optimal on rank-0 front.
-- Beats pure E2E Kamienny 2022 (the @∞ row of his own ablation).
+| | Black-box R² | BB size | Feynman solve (R² ≥ 0.99) | Feynman size |
+|---|---|---|---|---|
+| E2E Kamienny 2022 (seq2seq) | 0.797 | 61 | **87%** | 121 |
+| DGSR+MCTS 2023 | **0.846** | 41 | 80% | **33** |
+
+Two-sided result: **MCTS wins on black-box (harder, OOD-ish) but loses on
+Feynman solve rate to pure seq2seq.** On Feynman the MCTS payoff shows up as
+much simpler formulas (33 vs 121 tokens), not as higher solve rate. So "MCTS
+beats seq2seq" is only unambiguously true on OOD/noisy data; in-distribution,
+pure seq2seq is stronger in solve rate and MCTS trades solve rate for
+simplicity.
+
+**Not the single best SR model, even in 2023.** DGSR+MCTS is on the rank-0
+Pareto front of SRBench, but so is **GP-GOMEA** — by Kamienny's own words *"GP-GOMEA
+and DGSR+MCTS seem to be the best approaches for achieving simple-yet-accurate
+models, and interestingly switch place in their trade-off between the two
+metrics on the black-box and Feynman datasets"*. AI-Feynman dominates Feynman
+outright. As of Huang 2025 (NeurIPS, our most recent paper), **Operon (GP) leads
+test accuracy** and Huang 2025 claims #2, with DGSR+MCTS folded into "prior
+MCTS-based approaches". GP has never been displaced at the top of SRBench —
+transformers + search joined the front, they didn't sweep it.
+
+**Relevance caveat for Boolformer:** SRBench is real-valued SR. None of these
+benchmarks include Boolean function inference, so "who is #1 on SRBench"
+doesn't directly tell us what to do for our plateau. The transferable lesson
+is mechanistic: size-10 mutations >> size-1 mutations, not "copy Operon".
 
 ## Critical read
 
