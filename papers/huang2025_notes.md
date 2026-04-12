@@ -51,7 +51,7 @@ Results don't create new tree nodes. They update top-N queues via bidirectional 
 UCB-extreme reports the single best reward per branch. But one branch hitting 60% once vs. many rollouts hitting 55-65% are treated identically. The second case indicates a **fertile basin** — mutations are likely to find improvements nearby. Max throws this away. A quantile-based or max+variance selection could exploit it.
 
 ### Forced full-expansion before descent
-`is_leaf()` returns true if a node has ANY unexpanded children. Descent stops there and must expand before going deeper. With ~11 actions (operators + constant + variables), every node on the path needs all 11 children expanded before the tree grows deeper through it. In contrast, AlphaZero/PUCT gives unvisited actions a finite prior-weighted score — low-prior actions can be skipped entirely. This wastes budget on unpromising siblings.
+`is_leaf()` returns true if a node has ANY unexpanded children. Descent stops there and must expand before going deeper. With ~11 actions (operators + constant + variables), every node on the path needs all 11 children expanded (one random child per visit, so 11 visits) before the tree grows deeper through it. In contrast, AlphaZero/PUCT gives unvisited actions a finite prior-weighted score — low-prior actions can be skipped entirely. This wastes budget on unpromising siblings.
 
 ### Blind expansion wastes the top-N signal
 Compounding the above: when expanding an unexpanded child, selection is uniformly random among remaining moves. But the top-N queue at the parent already contains complete formulas specifying exactly which token should come next. This information is available but unused. Trivial improvement: prioritize expanding the child matching the best formula in the queue. No neural network needed.
@@ -61,8 +61,49 @@ A brilliant formula from mutation lives only in top-N queues — it gets no node
 
 Partially mitigated: when a node is later expanded, its parent pushes top-N entries down to the new child. So the signal eventually reaches new nodes — but with delay, and only if expansion happens to choose the right child (which is random).
 
+**Proposed fix:** materialize tree nodes for mutated/crossed formulas so they're directly reachable by descent. But first canonicalize (`expand()` + `nsimplify(..., tolerance=1e-3)` for constants — tolerance is required, default `nsimplify` only finds exact rationals and won't snap `0.500012` to `1/2` or drop tiny spurious coefficients like `0.000342`) so algebraically equivalent variants — `2x + x` and `3x`, or the same expression with `0.500012` vs `1/2` constants — map to the same canonical path rather than creating duplicate branches. This also doubles as a global dedup mechanism for the wider search: multiple branches generating equivalent formulas get unified at a single node. Cost: one simplify call per mutation (~ms), dwarfed by LM cost per evaluation.
+
 ### Missing DGSR+MCTS comparison
 Kamienny's DGSR+MCTS (ref [25]) is cited in related work but **not benchmarked**. The paper compares against DSR, NGGP, GEGL, PySR — all weaker than DGSR+MCTS. Notable omission. Direct comparison would be informative: zero-training MCTS vs neural-guided MCTS on identical benchmarks.
+
+### Unfair sibling comparison from random rollout
+
+All three are genuinely good ideas. Let me think through each:
+
+**1. Expand all siblings in one iteration with shared completion**
+- Strong idea. It turns the sibling comparison into a **common random numbers** experiment — same context, only the sibling choice differs. Directly addresses the unfairness you spotted.
+- Cost: one iteration does 11× evaluations at that depth. But the signal is much cleaner — fewer iterations may be needed overall.
+- Implementation: straightforward modification of the expand step. Instead of expanding one random child and rolling out, expand all unexpanded children and roll out each with the **same** random seed for the completion.
+
+**2. Least-harm completion instead of random**
+- Brilliant, but the "right" completion depends on the operator. Your `x*1=x` and `x+0=x` examples are identities. Generalizing:
+  - `a * ?` → `?=1`
+  - `a + ?` → `?=0`
+  - `a - ?` → `?=0`
+  - `a / ?` → `?=1`
+  - `log(?)` → `?=e` (gives 1) or `?=1` (gives 0)
+  - `sin(?)` → `?=0`
+  - `exp(?)` → `?=0` (gives 1)
+- **Even better generalization:** replace every unfilled position with `R` (constant token) and let LM fit them all. The partial formula gets evaluated at its **best possible completion** under the committed structure. This turns MCTS evaluation into "what's the best this structural commitment can achieve?" instead of "what does one random completion look like?"
+- This is actually a profound change. A partial formula becomes a **family of complete formulas parameterized by learnable constants**, and the reward is the best in that family.
+
+**3. Re-evaluate sibling nodes**
+- Directly fixes the unfairness in Nguyen-3 (`x0` was evaluated with an incomplete POLY, `sin` with a more complete one).
+- Light version: **invalidate cached rewards** when a branch above changes, so the next UCB-extreme query triggers fresh evaluation. Lazy rather than eager.
+- With suggestion 2, re-evaluation is cheap because the completion is deterministic — just redo the LM fit on the new context.
+
+**Combining all three:** Expand all siblings together, complete with `R` tokens let LM fit, re-evaluate lazily when structure changes. This gives fair, informative, consistent comparisons. The search becomes much more like "structural commitment testing" instead of "random rollout lottery."
+
+**Caveats:**
+- Suggestion 2 (R-fill + LM fit) makes rollout expensive — each partial formula triggers an LM run instead of a cheap numerical evaluation. Huang's current setup does LM anyway on terminal formulas, so it's not worse than the final cost, but now it happens at every node.
+- Suggestion 1 and 3 are additive fixes. Suggestion 2 is transformative and might need its own paper.
+
+**My ranking for impact/effort:**
+1. Suggestion 1 (same completion, all siblings) — cheapest win, fair comparisons
+2. Suggestion 2 variant: "never rollout randomly, always use LM fit on R-filled" — transformative
+3. Suggestion 3 — nice-to-have once 1 and 2 are in
+
+These would be a solid paper on top of Huang. Quality-of-search improvements, not just a new benchmark number.
 
 ### No generalization across problems
 Each problem solved independently from scratch. No knowledge transfer between problems. A learned prior (policy network) would amortize experience — but that's exactly what this paper avoids.
