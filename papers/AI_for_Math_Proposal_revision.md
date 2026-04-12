@@ -113,32 +113,62 @@ These are mistakes a reviewer will repeat. Listed for actionability.
 
 These are the things to decide before the next proposal revision.
 
-### Q1. What is the amplification operator?
+### Q1. What is the amplification operator? — LOAD-BEARING for Q2
 
 AlphaZero's loop only works because **MCTS produces a policy better than the
 network prior**, and the network is trained to match the improved policy.
 Without an analog, the self-play loop has nothing to climb on — it just
 distills its own outputs.
 
-Options for ATP:
+**This is not optional.** Without amplification, the Q2 training loop
+(filter-then-CE or hindsight-relabel) is pure self-distillation: the
+Assessor trains on its own outputs and consolidates its current distribution
+but never extends it. Kamienny's loop improves because his MCTS explores
+mutation sequences the raw Mθ would rarely sample on its own, then distills
+those search-found trajectories back. The search is doing the work; the CE
+loss is just the distillation mechanism.
+
+**Options for the Assessor's amplification operator** (from cheapest to
+strongest):
+
+1. **Best-of-N sampling** (minimum viable amplification). For each `d_i`,
+   generate N ≫ k candidates at high temperature, keep the top-k by
+   difficulty match `|measured − d_i|`. Equivalent to one step of policy
+   improvement with a Monte-Carlo value estimator. Provably better than the
+   raw prior as N → ∞. No new code paths, one hyperparameter (N).
+2. **Value-guided decoding / beam search.** Score partial formulas at each
+   token step via a learned value head that predicts final difficulty match.
+   Bias next-token distribution toward tokens that lead to target difficulty.
+   This is AlphaGo's "guided playouts" at the generation level.
+3. **Full MCTS over formula construction.** State = partial formula,
+   actions = token additions, prior = Assessor's next-token distribution,
+   value = value head predicting difficulty match. PUCT selection. Train
+   Assessor to match the improved policy (visit counts) and value head to
+   match observed outcomes. Direct AlphaZero analog for generation.
+
+For the **Prover** side (ATP / SR):
 - MCTS over proof tactics (Kamienny-style, with Mθ as prior)
 - Best-of-N proof attempts + verifier as ground truth
-- Symbolic engine (lean-egg / nlinarith) as the amplification — model proposes,
-  symbolic engine verifies and possibly extends, distill back
+- Symbolic engine (lean-egg / nlinarith) as amplification — model proposes,
+  engine verifies and possibly extends, distill back
 
-**Decision needed.** Whichever is chosen, name it explicitly in the proposal
-and connect it to AlphaZero's MCTS so the analogy is mechanically defended,
-not just thematic.
+**Decision needed.** Whichever is chosen for each side (Assessor and Prover),
+name it explicitly in the proposal and connect it to AlphaZero's MCTS so the
+analogy is mechanically defended.
 
-**How the training signal flows out of the amplification operator** (settled
-by Q2 above): whatever the operator is, the training signal for the network
-is **cross-entropy on the filtered successful trajectories**, not a
+**Pilot recommendation:** best-of-N for the Assessor (cheapest, sufficient
+to demonstrate improvement), MCTS for the Prover (already implemented on the
+`mctx` branch). Upgrade the Assessor to full MCTS later if best-of-N
+plateaus.
+
+**How the training signal flows out of the amplification operator** (per Q2):
+whatever the operator is, the training signal for the network is
+**cross-entropy on the filtered/relabeled successful outputs**, not a
 reward-weighted gradient. AlphaZero does this (visit counts + winner as CE
 targets). Kamienny does this (Table 5.1 "Selection & Imitation"). Huang 2025
 does the opposite extreme — no learned model at all, pure search + classical
 bandit — and still gets SRBench-competitive results, which sets a useful
-"zero-pretraining" lower bound on what the amplification operator alone can
-achieve. Both endpoints are useful anchors.
+"zero-pretraining" lower bound on what amplification alone can achieve.
 
 User position: open to MCTS, undecided.
 
@@ -147,11 +177,17 @@ User position: open to MCTS, undecided.
 Resolved 2026-04-11. Confirmed against Kamienny 2023 thesis
 (pp. 61, 79, 82, 84–85).
 
-**Recipe**: plain seq2seq per-token cross-entropy, with an expert-iteration
-loop that populates a replay buffer from a generate-then-filter step. Same
-pattern as Kamienny's Mθ training and AlphaZero's policy head.
-**No REINFORCE. No policy gradient. No batch loss. No scalar-reward gradient
-weighting.**
+**Recipe**: amplified generation → data curation → plain seq2seq per-token
+cross-entropy. Same pattern as Kamienny's Mθ training and AlphaZero's policy
+head. **No REINFORCE. No policy gradient. No batch loss. No scalar-reward
+gradient weighting.**
+
+**Critical dependency on Q1.** Without an amplification operator in the
+generation step, this loop is pure self-distillation — the Assessor trains
+on its own outputs and consolidates but never improves. The amplification
+(best-of-N at minimum, MCTS at maximum) is what produces outputs the raw
+Assessor would not have sampled on its own. The CE training then distills
+those amplified outputs back into the prior. See Q1 for the options.
 
 **Input structure**: the Assessor takes a scalar difficulty target
 `d_i ∈ [0, 1]` as a per-sample input (extra token or continuous embedding).
@@ -166,21 +202,40 @@ map before the Prover-in-the-loop phase. Analog of Kamienny's procedural
 dismantling.
 
 **Phase 2 — Expert iteration.** Loop:
-1. For each `d_i` in the batch, sample `k` candidate formulas from the current
-   Assessor (temperature > 0).
-2. Measure each candidate's actual Prover-difficulty. **Must be continuous**
-   (truth-table distance for Boolean, R² for real-valued). Binary
-   success/failure only supports a two-bucket curriculum (`d ∈ {easy, hard}`),
-   not a graded one.
-3. **Filter**: keep candidates where `|measured − d_i| < ε`. Discard the rest.
-4. Add kept `(d_i, formula)` pairs to a replay buffer.
+1. For each `d_i` in the batch, **amplify**: generate N ≫ k candidates from
+   the current Assessor (e.g., N = 64 at high temperature), keep the top-k
+   by difficulty match `|measured − d_i|`. This is the policy-improvement
+   step (see Q1 — best-of-N is the minimum viable option). Without this
+   step the loop is self-distillation and cannot improve.
+2. Measure each kept candidate's actual Prover-difficulty. **Must be
+   continuous** (truth-table distance for Boolean, R² for real-valued).
+   Binary success/failure only supports a two-bucket curriculum.
+3. **Data curation** — two options (choose one):
+   - **Filter-then-CE**: keep candidates where `|measured − d_i| < ε`.
+     Discard the rest. Train on `(d_i, formula)` pairs.
+   - **Hindsight relabeling** (HER, Andrychowicz et al. 2017): relabel
+     every candidate with its *actual* measured difficulty `c_i` instead of
+     the requested `d_i`. Train on `(c_i, formula)` pairs. **More
+     data-efficient** — nothing is thrown away. The Assessor learns the
+     mapping `c → formula` from its own amplified outputs, regardless of
+     whether the original request was matched. Equivalent to "I was
+     actually trying to produce a formula of difficulty `c_i`."
+4. Add curated pairs to a replay buffer.
 5. Train Assessor with plain per-token CE on the buffer.
 6. Repeat.
 
-The scalar "measured difficulty" enters training **only as a binary
-include/exclude filter on the buffer**, never as a gradient weight. Failed
-candidates contribute zero gradient. Same discipline as Kamienny's
-failed-trajectory discard.
+Under either curation method, the scalar "measured difficulty" enters
+training as a **label** (filter gate or hindsight label), never as a
+gradient weight. The CE loss is standard seq2seq. Same discipline as
+Kamienny's failed-trajectory discard (filter) or AlphaZero's relabeling of
+search outputs.
+
+**HER vs filter trade-off.** HER is more data-efficient (uses every sample);
+filter-then-CE is more selective (only trains on verified matches). With
+best-of-N amplification already selecting the closest matches, HER on the
+top-k is a natural fit — the k kept candidates are already close to target,
+and relabeling with exact `c_i` gives slightly more accurate labels than
+rounding to `d_i`.
 
 **Primary-source citation** (Table 5.1, Kamienny thesis p. 61), worth quoting
 verbatim in the proposal:
@@ -225,10 +280,13 @@ calibration" lives in `P(d)`, not in the loss function.
 | D6: cold-start (new) | Needs Phase 1 warm-start | Complexity-proxy pretraining solves it |
 | D7: covariate shift (new) | ✅ Mitigated | Shared-weight multitask — Prover is the same model, has always seen what Assessor generates |
 | D8: mode coverage gap (new) | Needs adaptive `P(d)` | Prioritize `d` where Assessor currently produces on-target candidates |
+| D9: self-distillation trap (new) | ✅ Prevented by Q1 amplification | Without best-of-N or MCTS in Phase 2 step 1, the loop trains on its own raw samples and cannot improve beyond the warm start. Amplification is the fix — it produces outputs the raw prior wouldn't sample. |
 
 **Blockers remaining:** D1b (cheap: add pairwise-distance term to loss) and
-D2 (refinement: skip for pilot, address post-plateau). Everything else is
-either prevented by the design or has a concrete mitigation.
+D2 (refinement: skip for pilot, address post-plateau). D9 (self-distillation)
+is structurally prevented by the amplification step in Phase 2, but only if
+amplification is actually implemented — it's the single most important
+component of the loop.
 
 ### Q3. Difficulty band calibration over time — PARTIALLY RESOLVED via Q2
 
