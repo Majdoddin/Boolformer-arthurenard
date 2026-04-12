@@ -50,8 +50,11 @@ Results don't create new tree nodes. They update top-N queues via bidirectional 
 ### Max discards basin information
 UCB-extreme reports the single best reward per branch. But one branch hitting 60% once vs. many rollouts hitting 55-65% are treated identically. The second case indicates a **fertile basin** — mutations are likely to find improvements nearby. Max throws this away. A quantile-based or max+variance selection could exploit it.
 
+### Forced full-expansion before descent
+`is_leaf()` returns true if a node has ANY unexpanded children. Descent stops there and must expand before going deeper. With ~11 actions (operators + constant + variables), every node on the path needs all 11 children expanded before the tree grows deeper through it. In contrast, AlphaZero/PUCT gives unvisited actions a finite prior-weighted score — low-prior actions can be skipped entirely. This wastes budget on unpromising siblings.
+
 ### Blind expansion wastes the top-N signal
-When expanding a new child, selection among unexpanded children is random. But the top-N queue at the parent already contains complete formulas that specify exactly which token should come next. This information is available but unused for guiding expansion. Trivial improvement: prioritize expanding the child matching the best formula in the queue. No neural network needed.
+Compounding the above: when expanding an unexpanded child, selection is uniformly random among remaining moves. But the top-N queue at the parent already contains complete formulas specifying exactly which token should come next. This information is available but unused. Trivial improvement: prioritize expanding the child matching the best formula in the queue. No neural network needed.
 
 ### Mutated formulas have no tree presence
 A brilliant formula from mutation lives only in top-N queues — it gets no node in the tree. Forward propagation (`propagate()` in code) walks down through existing children matching the path; if no matching child exists (`if (!found) break;`), propagation stops. Future UCB-extreme selection will be drawn toward the branch by the high reward, but the actual path to recreate that formula may not exist as tree nodes.
