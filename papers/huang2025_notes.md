@@ -50,6 +50,8 @@ Results don't create new tree nodes. They update top-N queues via bidirectional 
 ### Max discards basin information
 UCB-extreme reports the single best reward per branch. But one branch hitting 60% once vs. many rollouts hitting 55-65% are treated identically. The second case indicates a **fertile basin** — mutations are likely to find improvements nearby. Max throws this away. A quantile-based or max+variance selection could exploit it.
 
+**Note on noise aggregation.** Classical UCT propagates *means* because the LLN cancels rollout variance, giving concentration-bound regret proofs (Kocsis & Szepesvári 2006). UCB-extreme propagates *max*, giving up noise cancellation entirely — justified only because SR reward is deterministic given structure, so "best formula found" is ground truth, not a noisy estimate. But the noise doesn't vanish; it shifts to **proposal-order variance** (which formulas get sampled first), which is why Huang shows seed sensitivity and why variance reduction must come from CRN / matched-pair techniques rather than averaging.
+
 ### Forced full-expansion before descent
 `is_leaf()` returns true if a node has ANY unexpanded children. Descent stops there and must expand before going deeper. With ~11 actions (operators + constant + variables), every node on the path needs all 11 children expanded (one random child per visit, so 11 visits) before the tree grows deeper through it. In contrast, AlphaZero/PUCT gives unvisited actions a finite prior-weighted score — low-prior actions can be skipped entirely. This wastes budget on unpromising siblings.
 
@@ -104,6 +106,43 @@ All three are genuinely good ideas. Let me think through each:
 3. Suggestion 3 — nice-to-have once 1 and 2 are in
 
 These would be a solid paper on top of Huang. Quality-of-search improvements, not just a new benchmark number.
+
+#### Refinement to suggestion 1: matched-pair sampling over *multiple* shared completions
+
+Suggestion 1 (common completion across siblings) is a special case of **Common Random Numbers (CRN)** — the variance-reduction technique from simulation/statistics. Standard CRN uses a *single* shared completion. That's not fully fair in SR for a subtle reason: siblings that differ structurally also differ in what they "absorb" of the target, so they want *different* optimal contexts for the rest of the formula.
+
+Concrete example — Nguyen-3 on [-1,1]. Say `f = + [poly] <hole>`, and we're comparing sibling `x` vs sibling `sin(x)`:
+
+- With sibling **x**, the best `[poly]` is exactly `x² + x³ + x⁴ + x⁵`.
+- With sibling **sin(x)**, Taylor gives `sin(x) ≈ x − x³/6 + x⁵/120`, so the best `[poly]` is *slightly different*: `x² + (x³ + x³/6) + x⁴ + (x⁵ − x⁵/120)` — it has to compensate for what `sin(x)` deviates from `x`.
+
+Same target, different best decomposition. CRN with a *single* shared `[poly]` completion will favor whichever sibling that completion happens to flatter. Even with CRN, the comparison is biased.
+
+**Fix — Version B: CRN with multiple completion sets, per-sibling max.**
+1. At expansion time, draw N random completions of the "rest of f" (call them `C₁, …, C_N`).
+2. For each unexpanded sibling, evaluate it under **each** of the N completions.
+3. Record the *max* reward per sibling over N completions.
+4. Compare siblings by their max.
+
+Each sibling gets a fair chance to find its best supporting context, and the comparison uses correlated noise (CRN between siblings) so between-sibling variance shrinks. This is known in simulation literature as **matched-pair Monte Carlo** — the statistically optimal way to compare K alternatives under random perturbation when each might have a different optimal context.
+
+**Cost:** `N × K` LM fits per expansion instead of 1. With N=4, K≈6, that's 24 LM fits per expansion. At ~500k expansions it comes to ~12M LM fits — ~6× Huang's current rollout budget of 2M. Feasible but not free. For easier problems it's overkill; for the fragility cases (like Nguyen-3 [-1,1]) it directly targets the failure mode, because exploit branches win by a narrow rollout lottery that matched-pair sampling eliminates.
+
+**Further refinement — only pay matched-pair cost where it matters.** Huang's descent stops at any node with unexpanded children, so to *pass* a node all K children must be expanded, which means descent must reach it K times. Each of those K visits is UCB-directed at ancestors, so "fully expanded" is itself evidence the branch is promising — the node has survived K UCB-selections at the parent level. This means the **parent-level sibling unfairness** (which of the parent's children survives) is largely absorbed by the 10-visit survival pressure: unpromising branches never get fully expanded in the first place, and their "unfair" comparisons at the top never matter.
+
+What's NOT absorbed is the **child-level sibling unfairness**: once a node's K children are all expanded, UCB-extreme at this node compares them by their individual max rewards, each based on 1 unmatched random-completion rollout. That's where matched-pair pays off.
+
+**Corollary:** run matched-pair sampling only at the *transition moment* — the expansion that takes the node from "has unexpanded moves" to "all moves expanded, ready for UCB selection." At that moment, re-evaluate all K children with N shared completions and overwrite each child's initial max. This targets exactly the child-level unfairness without paying matched-pair cost elsewhere. The number of transition moments is much smaller than total expansions (roughly 1 per passed node, not 1 per new child), so the amortized cost is well below the naive ~6× estimate — probably closer to 1.5–2× current budget. Still not free, but much cheaper and surgical.
+
+**How it plays with UCB-extreme:** UCB-extreme already tracks max over many rollouts over the full search, so the *asymptotic* distribution is the same either way. The difference is the *early* comparison — a sibling whose first rollout is unlucky gets fewer visits, compounding. Eager multi-rollout at expansion breaks this: every newly expanded branch is guaranteed N samples before UCB selection sees it, so no branch is penalized for bad early luck.
+
+**Updated ranking:**
+1. Suggestion 1 refined → **matched-pair CRN (N shared completions)**: cheapest non-trivial win that actually targets the asymmetry.
+2. Suggestion 2 (R-fill + LM, transformative): still the best long-term answer because it makes rollout deterministic and evaluation = "best achievable under structural commitment".
+3. Pure single-CRN (original suggestion 1) is dominated by matched-pair.
+4. Suggestion 3 (lazy re-evaluation) was already subsumed by 1; under matched-pair CRN it's even more redundant.
+
+**Caveat on "short random rollouts":** an earlier idea in this file was to cap rollout length to reduce noise. On reflection that's not a general improvement — classical MCTS is *built* on random rollouts (UCT, MoGo, Crazy Stone, etc.), and random play gives informative averages when the space is large enough to explore. For SR specifically it's a weaker version of the right fixes (matched-pair CRN or R-fill + LM), because it reduces noise at the cost of also reducing exploration. Leaves-only rollout at `sin(?)` can only produce `sin(R)` or `sin(x0)`, never `sin(x²)`, so it forbids discovering useful substructures during rollout. Not pursued.
 
 ### RNG choice is not the cause of seed fragility
 
