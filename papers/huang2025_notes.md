@@ -105,6 +105,16 @@ All three are genuinely good ideas. Let me think through each:
 
 These would be a solid paper on top of Huang. Quality-of-search improvements, not just a new benchmark number.
 
+### RNG choice is not the cause of seed fragility
+
+Huang's C++ core uses `std::mt19937_64`. MT19937 has known problems — poor small-seed diffusion (nearby seeds produce correlated state), TestU01 BigCrush failures, 2.5 KB state — and was replaced as NumPy's default in 1.17 (2019) by PCG64. Swapping to PCG64DXSM (the self-correlation-fixed variant from `imneme/pcg-cpp`) is a trivial one-line change in `types.hpp`.
+
+We tested it. On Nguyen-3 [-1,1] with R, success rate went from 4/8 to 6/10 — within noise. More telling: **the "wrong" seeds under PCG64DXSM use DIFFERENT exploits** than under MT19937 (exp·x, cos·x, rational 1/(1+x), sin-linear) rather than converging to the truth. So swapping the RNG just shuffles which seeds land in exploit basins; it doesn't reduce the total size of those basins.
+
+The seed fragility on Nguyen-3 [-1,1] is **not** an RNG quality problem. It's benchmark under-determination: the narrow range admits many transcendental Taylor-approximations of `x⁵ + x⁴ + x³ + x² + x` that all hit reward 1.0. Any MCTS with random rollouts will find one of them some fraction of the time, regardless of PRNG. The real fixes are (a) widen the range to [-10, 10] (which kills the exploits because they extrapolate badly), or (b) the sibling-fairness proposals above.
+
+Worth keeping PCG64DXSM anyway for code-quality reasons — see `mcts4sr/TODO_prs.md` PR #4.
+
 ### No generalization across problems
 Each problem solved independently from scratch. No knowledge transfer between problems. A learned prior (policy network) would amortize experience — but that's exactly what this paper avoids.
 
