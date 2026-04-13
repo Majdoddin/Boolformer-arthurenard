@@ -144,6 +144,27 @@ What's NOT absorbed is the **child-level sibling unfairness**: once a node's K c
 
 **Caveat on "short random rollouts":** an earlier idea in this file was to cap rollout length to reduce noise. On reflection that's not a general improvement — classical MCTS is *built* on random rollouts (UCT, MoGo, Crazy Stone, etc.), and random play gives informative averages when the space is large enough to explore. For SR specifically it's a weaker version of the right fixes (matched-pair CRN or R-fill + LM), because it reduces noise at the cost of also reducing exploration. Leaves-only rollout at `sin(?)` can only produce `sin(R)` or `sin(x0)`, never `sin(x²)`, so it forbids discovering useful substructures during rollout. Not pursued.
 
+#### GP/tree budget ratio concern under burst-expand
+
+Huang's baseline allocates roughly **70% of the 2M eval budget to GP ops** and 30% to tree-expansion rollouts. The mechanism is probabilistic: during each descent, at every non-leaf node, a GP op fires with probability `gp_rate = 0.2`. With typical depth ~10, that's ~2 GP events × ~1.5 evals each = ~3 GP evals per iteration, against 1 tree-expansion rollout. This matches the folklore that **GAs need many evaluations to make progress** — GP relies on population-wide accumulation, not per-op wins, so Huang deliberately (or implicitly) spends most of the budget on GP churn, not on growing the tree.
+
+Naive burst-expand (expand all K children of a leaf with N shared-seed rollouts each) inverts this: per iteration the burst costs `K × N ≈ 40` tree evals, vs unchanged ~3 GP evals from descent. **Ratio collapses from 70/30 GP-heavy to ~7/93 tree-heavy.** The GA side is starved ~10×. Under the 2M budget, ~47K iterations instead of ~500K — fewer but fatter.
+
+**Can raising `gp_rate` compensate?** Partially. `gp_rate` is bounded at 1.0, so the ceiling is `depth × 1.0 × 1.5 ≈ 15 GP evals per descent`. At the N=4 burst cost of 40 tree evals per iteration, max `gp_rate = 1.0` gets to 73/27 tree/GP — nowhere near the 30/70 target.
+
+**Recipe used in our implementation: `kBurstSamplesN = 1` + default `gp_rate = 0.2`.** With burst N=1 the per-iteration tree cost is `K ≈ 10`, and at `gp_rate = 0.2` the GP evals are ~3. Ratio ~77/23 tree/GP — still tree-heavier than Huang, but within factor-of-3 range. If experiments show GP starvation, bump `gp_rate` to 0.5 (→ 10 tree + ~8 GP = 55/45) or 1.0 (→ 10 + 15 = 40/60, close to Huang). Structural change and budget-balance knob are kept orthogonal: first measure the pure effect of burst-expand at default settings, then tune `gp_rate` if needed. Additional "post-burst GP ops at the parent" and "progressive burst across iterations" are deferred as future knobs, not defaults.
+
+#### Idea: automatic hyperparameter adaptation
+
+The `(N, gp_rate)` sweet spot is clearly problem-dependent (Nguyen-3 vs Nguyen-4 in the matched-pair notes), and probably also *phase*-dependent within a single run: early exploration wants low GP (fresh path_queues, not much to mutate from), late refinement wants high GP (queues are populated, mutation is productive). A single global setting picked by hand will always be suboptimal for some combination. A few ways to close this without a grid search:
+
+1. **Bandit over hyperparameter values.** Treat `gp_rate ∈ {0.2, 0.3, 0.4, 0.5, 0.6}` as arms of a multi-armed bandit, allocate search budget via EXP3 or UCB based on observed "improvement rate" (Δ best_reward per 1000 evals). Per-problem autotuning with O(1) overhead.
+2. **Schedule.** Start with `gp_rate` low (favoring tree growth) and ramp up as path_queues populate, similar to learning-rate schedules in DL. Natural answer to the early-vs-late phase asymmetry.
+3. **Signal-based local adaptation.** Monitor path_queue saturation per node — if entries are close to K and churning fast, lower gp_rate at that node; if the queue is stable with stale entries, raise it. Local per-node gp_rate rather than global.
+4. **Meta-search.** Run a pilot search at low budget across 3–5 hyperparameter points, pick the best setting, run the full search with it. Simple and robust but pays a constant fraction of budget as overhead.
+
+Option 1 is the principled version; option 2 is cheapest to implement. The same ideas apply to `kBurstSamplesN`, `exploration_rate`, and `c` — any knob where we currently pick a number and hope for the best.
+
 ### RNG choice is not the cause of seed fragility
 
 Huang's C++ core uses `std::mt19937_64`. MT19937 has known problems — poor small-seed diffusion (nearby seeds produce correlated state), TestU01 BigCrush failures, 2.5 KB state — and was replaced as NumPy's default in 1.17 (2019) by PCG64. Swapping to PCG64DXSM (the self-correlation-fixed variant from `imneme/pcg-cpp`) is a trivial one-line change in `types.hpp`.
