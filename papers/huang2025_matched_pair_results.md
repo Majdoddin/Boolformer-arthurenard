@@ -48,6 +48,28 @@ Both faster AND structurally cleaner — the theoretical 1.5–2× cost overhead
 
 8/10 seeds faster; only seed 860 slower. Largest speedup 8.2× (seed 16850, which previously wandered through 605k evals in transcendental territory). Mean speedup 2.4×.
 
+## N sensitivity (three-seed sweep)
+
+Tested `kMatchedPairN ∈ {1, 2, 4}` at default `gp_rate=0.2` on seeds 23654, 15795, 860. All runs recovered the target exactly under `expand + nsimplify(tolerance=1e-3)`.
+
+| Seed | N=4 (prior) | N=2 | N=1 |
+|---|---:|---:|---:|
+| 23654 | 8.2s / 74k | 20.4s / 193k | 22.9s / 209k |
+| 15795 | 11.9s / 102k | 21.4s / 192k | 12.3s / 109k |
+| 860 | 21.4s / 166k | 2.7s / 27k | 8.7s / 79k |
+| **Mean** | **13.8s / 114k** | **14.8s / 137k** | **14.6s / 132k** |
+| Exact structure | 2/3 + drift | **3/3** | **3/3** |
+
+All three values of N give mean runtimes within ~7% of each other and 3/3 exact structural recovery. The per-seed distribution, however, flips: N=4 is fastest on the "easy" seed 23654 (8.2s) but slowest on seed 860 (21.4s); N=2 and N=1 dramatically improve 860 (2.7s, 8.7s) at the cost of 23654. N=4's sharper sibling discrimination over-commits on seed 860, sending the search down a slow path; the noisier ranking at lower N gets lucky and finds the polynomial faster.
+
+Per-iteration cost model (K=10 branching, depth=6, gp=0.2): expand evals/iter = `1 + N`, so N=1→2, N=2→3, N=4→5. GP cost ~1.2/iter (same for all). The cost ratio 2/3/5 predicts N=4 to be ~1.67× slower per iter than N=1 — but the mean runtimes are within 7%, meaning lower N takes proportionally more iterations (noisier ranking). The net is a wash on the mean, with seed-level variance trades. **N=4 is not strictly optimal; per-benchmark tuning of N is plausibly worthwhile.**
+
+### Key insight: matched-pair N=1 beats burst-expand N=1
+
+> **Matched-pair N=1 at gp=0.2: 14.6s / 132k mean. Burst-expand N=1 at gp=0.4: 18.6s / 209k mean** (`huang2025_burst_expand_results.md:42-47`). Same sample count (1 shared-seed rollout per sibling), same CRN mechanism, matched-pair running at a *lower* gp_rate — yet matched-pair is **~1.3× faster** in time and uses **~1.6× fewer evals**.
+
+This isolates the advantage as the **lazy transition-moment design**, not sample count or GP rate. Burst-expand pays K × N = 10 evals per bursted leaf immediately, including at dead-end subtrees; matched-pair pays 1 eval per new child during exploration and only fires the full K × N re-eval at parents UCB revisits to the K-th child. The same CRN fairness property, achieved at ~25–30% lower overhead. See `huang2025_burst_expand_results.md` §"Why burst has a ~5× gap, not a ~2× gap" for the per-iteration cost breakdown that generalizes this observation to N ∈ {2, 4}.
+
 ## Key Structural Observation
 
 **Matched-pair eliminates the transcendental-exploit class entirely (4/10 → 0/10).** All 10 matched-pair runs converge to polynomial or rational structures. The 6/10 "OK" runs explicitly recover the **cyclotomic factorization** of Φ₅(x):
@@ -82,7 +104,7 @@ So matched-pair isn't just a fairer comparison — it's a **structural quality f
 ## Caveats
 
 1. **Single benchmark, single configuration.** Tested only Nguyen-3 [-1,1] with R, 10 seeds. Need to repeat across other Nguyen problems and on harder benchmarks (Livermore, Jin) before claiming this is a general win.
-2. **N=4 hardcoded.** Should test N ∈ {1, 2, 4, 8} for sensitivity. N=4 was an arbitrary first guess; smaller might suffice and be even cheaper.
+2. **N sweep partial.** Tested N ∈ {1, 2, 4} on three seeds at gp=0.2; see §"N sensitivity (three-seed sweep)". All three work, mean runtime comparable, structural quality preserved. N=8 untested; per-benchmark tuning of N is plausible future work.
 3. **Compile-time flag.** To make `kMatchedPairN` runtime-configurable, add a field to `MCTSConfig` and plumb through Python bindings (`python/bindings.cpp`). ~10 more lines.
 4. **Effect may be Φ₅-specific.** Cyclotomic factorization is unusually clean for Nguyen-3 because Φ₅'s real factorization involves only one quadratic surd (φ). Higher-degree targets, sin/cos/exp targets, and non-symmetric targets may behave differently. Need to test.
 5. **No effect when no exploit basins exist.** On Nguyen-3 [-10, 10], baseline already converges in 12k evals with the correct cyclotomic form (the exploits don't survive extrapolation). Matched-pair should be neutral there. Hasn't been tested yet.
@@ -203,7 +225,7 @@ It hurts (or is neutral) when:
 
 1. Run on Nguyen-3 [-10, 10] to confirm matched-pair is neutral when exploits don't exist
 2. Run on all 12 Nguyen cases to see overall effect on the standard benchmark
-3. Test N ∈ {2, 8} for cost-vs-quality tradeoff
+3. Test N=8 for cost-vs-quality tradeoff (N ∈ {1, 2, 4} tested on three-seed subset)
 4. Run on Livermore-9 (degree-9 polynomial) to test if cyclotomic-style behavior generalizes
 5. Run on Nguyen-5/6 (sin·cos targets) to test if matched-pair *hurts* when transcendentals are actually needed
 
