@@ -14,6 +14,18 @@ Pure classical MCTS for symbolic regression. **No neural network, no pretraining
 
 Per-problem, from scratch: 2M expression evaluations, ~2 min single-core. Competitive with neural-guided methods (DSR, NGGP) and GP (PySR) on standard benchmarks.
 
+## Upstream default changes (commit 04e143a, 2026-04-15)
+
+Laivirt123 changed three defaults in `RegressorConfig` and `basic.yaml` without explanation (commit message: "Refactor benchmark runner and tune default search config"):
+
+| Parameter | Paper / old default | New default | Effect |
+|---|---|---|---|
+| `gp_rate` | 0.2 | **0.5** | GP mutation/crossover fires at 50% of non-leaf nodes instead of 20% |
+| `lm_iterations` | 100 | **50** | Levenberg-Marquardt constant-fitting budget halved |
+| `max_constants` | 6 | **10** | More `R` tokens allowed per formula (YAML only, C++ default unchanged) |
+
+**Tension with our findings:** our matched-pair experiments on Nguyen-3 [-1,1] showed lower GP share helps (matched-pair's benefit was partly an effective gp_rate reduction from ~0.2 to ~0.15 equivalent). Upstream went the opposite direction. Our experiments were single-benchmark; upstream may have optimized for the broader suite. The `lm_iterations` cut is likely just compute savings — most fits converge in <50 iterations on 20-sample problems.
+
 ## Architecture: one flat tree
 
 Unlike AlphaZero (two levels: real state + search tree per move), Huang uses **one tree for the entire problem**. Each node is a partial prefix expression; each edge appends one token. 2M iterations, each starting from root, each expanding exactly one new node.
@@ -63,7 +75,100 @@ A brilliant formula from mutation lives only in top-N queues — it gets no node
 
 Partially mitigated: when a node is later expanded, its parent pushes top-N entries down to the new child. So the signal eventually reaches new nodes — but with delay, and only if expansion happens to choose the right child (which is random).
 
-**Proposed fix:** materialize tree nodes for mutated/crossed formulas so they're directly reachable by descent. But first canonicalize (`expand()` + `nsimplify(..., tolerance=1e-3)` for constants — tolerance is required, default `nsimplify` only finds exact rationals and won't snap `0.500012` to `1/2` or drop tiny spurious coefficients like `0.000342`) so algebraically equivalent variants — `2x + x` and `3x`, or the same expression with `0.500012` vs `1/2` constants — map to the same canonical path rather than creating duplicate branches. This also doubles as a global dedup mechanism for the wider search: multiple branches generating equivalent formulas get unified at a single node. Cost: one simplify call per mutation (~ms), dwarfed by LM cost per evaluation.
+**Proposed fix — canonical simplification before top-N insertion:**
+
+When any formula enters a node's top-N queue (from rollout, GP mutation, or crossover — not just GP), additionally:
+
+1. Inline fitted `R` constants into the expression → SymPy expr
+2. `nsimplify(expr, tolerance=1e-2)` — **no `expand()`** (see below)
+3. Convert back to prefix tokens: operators/variables preserved, remaining constants → `R`
+4. Walk the simplified formula's prefix path through existing tree nodes
+5. At each matching node, offer the simplified formula to that node's top-N (re-evaluate with fresh LM fit for honest reward)
+
+**Why no `expand()`:** `expand` destroys good structure. The cyclotomic factorization `x·(x² + φx + 1)·(x² − x/φ + 1)` is depth ~5 in the prefix tree. `expand` turns it into `x⁵ + x⁴ + x³ + x² + x` — a nested `+` chain at depth ~11, past `max_depth=6`. The golden-ratio constants vanish, replaced by integer coefficients. The expanded form cannot be represented in the tree and loses the structural discovery matched-pair makes. `nsimplify` alone preserves the operator skeleton, only snapping constants (`0.618034 → (√5−1)/2`, `0.9997 → 1`, `6393264 → ∞` → term coefficient becomes 0 → term drops).
+
+**What nsimplify does at each stage of search:**
+
+- *Early/mid search* (reward < 0.99): formulas are imperfect. Extra terms have **substantial** coefficients (e.g., `0.15·sin(x)`) because they actively compensate for the main structure being wrong (`1.2·x²` instead of `x²`). No tolerance drops these — they're not close to 0. **nsimplify's main job here is constant-snapping for dedup**: `0.9997 → 1`, `1.618034 → φ`. Two formulas with identical operator trees but slightly different LM-fitted constants map to the same canonical form. This is the primary dedup source.
+
+- *Late search* (reward ≈ 1.0): main structure is correct. Decorative terms shrink to tiny coefficients (`sin(x/6393264)`, `exp(x)·9e-12`). Now nsimplify drops them entirely — `sin(x/6393264) → sin(0) → 0`, the term vanishes. This is genuine cleanup, producing shorter formulas.
+
+**Tolerance `1e-2`:** chosen to catch both cases. For constant-snapping, even `1e-3` works (`0.9997` is within `1e-3` of `1`). For term-dropping, `1e-2` catches coefficients like `0.003` that `1e-3` would miss. The safety net: the **original unsimplified formula is already in top-N** via normal propagation. The simplified version is an additional entry competing for a slot, not a replacement. If simplification is too aggressive (snaps `0.618` to `5/8`), the simplified version gets a worse reward on re-evaluation and doesn't make top-N. No harm done.
+
+**Depth guarantee:** `nsimplify` without `expand` never increases depth. It can only: (a) snap constants (same token count), (b) reduce terms to 0 and drop them (fewer tokens, less depth). The max-depth overflow concern is eliminated.
+
+**Dedup mechanism:** algebraically equivalent formulas found via different search paths — Horner form `x·(x·(x+1)·(x²+1)+1)`, direct polynomial `x⁵+x⁴+x³+x²+x`, cyclotomic `x·Φ₅(x)` with slightly different fitted constants — all produce the same canonical form after constant-snapping. They compete for the same top-N slots along the same tree path instead of fragmenting across separate branches.
+
+**Re-evaluation:** the simplified formula must get a fresh LM fit before entering top-N, because nsimplify may have changed constant values or dropped terms. Inheriting the original's reward would let bad simplifications enter with falsely high rewards. One extra LM fit per top-N entry — still cheap (~10ms) relative to the dedup benefit.
+
+**Cost:** one `nsimplify` call (~1ms) + one LM fit (~10ms) per top-N insertion. With K=500 queue size and ~500k iterations, total overhead is bounded by the number of actual top-N updates (queue insertions, not attempts), which is much smaller. Dwarfed by the ~2M baseline LM fits.
+
+**Implementation:** Python ↔ C++ bridge via pybind11 (already in use). The `nsimplify` call is in Python; the MCTS loop is in C++. On each top-N insertion, call back into Python with the inlined expression string, receive simplified prefix tokens + re-fitted reward. Latency ~11ms per call — acceptable if batched or if top-N insertions are infrequent relative to iterations.
+
+**SymPy round-trip caveat:** SymPy rewrites `x0*x0` as `Pow(x0, 2)`, which is not in the MCTS operator set `{+,-,*,/,sin,cos,exp,log,R}`. After nsimplify, run `expand_integer_powers()` to convert `Pow(x, n)` back to `Mul(x, x, ..., evaluate=False)` before converting to prefix tokens. Verified: canonical ordering survives this round-trip.
+
+**SymPy already handles commutative canonicalization:** `Add` and `Mul` arguments are stored in a deterministic canonical order (verified: variables sorted alphabetically, consistent ordering for functions and nested expressions). So nsimplify produces commutatively canonical output — no separate commutativity pass needed. The during-expansion detection (§ below) is an optimization that prevents non-canonical nodes earlier, saving LM fits.
+
+### TODO: Commutativity canonicalization during expansion (not yet implemented)
+
+**Problem:** `+ a b` and `+ b a` (and `* a b` / `* b a`) occupy different tree paths but are algebraically identical. The search wastes budget exploring both.
+
+**Mechanism — incremental comparison at expansion time:** during descent through the second argument of a commutative op, maintain a token-by-token comparison against the first argument (which is already complete). At each **expansion point** (when `expand_node` is about to create a new child):
+
+- New token < first arg's corresponding token → **non-canonical detected**. Don't create the node. Evaluate the canonical formula (`+ a b` with args swapped), `propagate()` its reward through existing canonical nodes (option A — no forced node creation).
+- New token > first arg's corresponding token → canonical confirmed, stop checking.
+- Tokens equal → undetermined, create node normally, continue checking at next expansion.
+
+**Why detection is at expansion, not during UCB descent:** descent through existing nodes is passive — those nodes already have stats and serve multiple formulas. Action (redirect or not) only matters when creating new nodes.
+
+**Shared intermediate paths are not wasted:** the path `+ → b_tokens → a_partial_tokens` serves ALL formulas `+ b (a_prefix ...)` where the completion is `≥ b` (canonical). Only the specific non-canonical completion gets redirected. Example: `+ → sin → cos → x1 → sin → cos` serves both `+ sin(cos(x1)) sin(cos(x2))` (canonical, x2 > x1) and the redirected `+ sin(cos(x1)) sin(cos(x0))` (non-canonical, x0 < x1).
+
+**Nested commutativity is not a special case:** in prefix notation, inner subtrees complete before outer ones. The arity-completion stack processes inside-out. By the time any outer commutative op's args are both complete, all inner ones have already been canonicalized.
+
+**Combines with nsimplify:** nsimplify at top-N time catches everything (algebraic equivalences, constant drift, commutativity). Expansion-time detection is an early filter that prevents building non-canonical paths and saves LM fits. Both feed `propagate()` with canonical token paths — they reinforce each other.
+
+### Structural analysis note for future runs
+
+The benchmark CSV has three expression columns: `expression` (raw prefix tokens), `materialized_expression` (constants inlined), and `simplified_expression` (after `sp.expand(sp.simplify(...))`). The `simplified_expression` column destroys structural discoveries — `expand` flattens factored forms (cyclotomic, Horner) into flat polynomials.
+
+**For structural analysis, apply `nsimplify(materialized_expr, tolerance=1e-2)` without `expand` or `simplify`.** This snaps constants (0.618034 → rational or surd) and drops decorative terms (sin(x/6393264) → 0) while preserving the formula's operator skeleton. The structural findings in our matched-pair/burst-expand reports (golden-ratio cyclotomic factorizations, Horner forms, trig identity rediscoveries) came from reading `materialized_expression`, not the SymPy-destroyed `simplified_expression`.
+
+### Numerical simplification — prune negligible subtrees (implemented)
+
+**Algorithm name:** "Numerical simplification" (Kinzett, Johnston & Zhang, 2008).
+
+**References:**
+- Kinzett et al. (2008), "Using Numerical Simplification to Control Bloat in Genetic Programming" — introduces the algorithm
+- Kinzett and Zhang (2010), "Investigation of simplification threshold and noise level" — investigates threshold vs noise relationship, no principled method found
+- Kattan and Poli (2010), "A Relaxed Approach to Simplification in Genetic Programming" — checks simplification effects several levels up the tree, not just locally
+- Javed, Gobet, and Lane (2022), "Simplification of genetic programs: a literature survey" in Data Mining and Knowledge Discovery — comprehensive survey
+
+**Reference implementation:** Brush (github.com/cavalab/brush), `src/simplification/constants.h` (~40 lines). Evaluates each non-leaf subtree on training data, replaces near-constant subtrees (variance < threshold) with a constant node (value = mean). Pre-order traversal.
+
+**Our implementation:** `include/imcts/core/simplify.hpp` — `simplify_to_prefix()`. After LM fitting, runs one forward pass over the tree on training data, checks per-node variance, emits simplified prefix tokens. Controlled by `simplify_threshold` config (0 = disabled).
+
+**Post-processing:** only additive identities (`0+x→x`, `x+0→x`, `x-0→x`). These clear dead constant nodes left by Brush replacements. Absolute error bounded by eps regardless of the other operand.
+
+Multiplicative identities (`1*x→x`, `0*x→0`) are NOT applied — their error = |coeff| × |f(x)| is unbounded for large f(x). Example: `0.0001 * exp(exp(100*x))` is huge, not zero. The variance check handles cases where the product is actually near-constant on the data.
+
+**Key caveats:**
+1. **Threshold**: configurable absolute variance threshold. Brush uses 1e-5. Relative thresholding is an open problem.
+2. **NaN/Inf**: implicit safety — `NaN < threshold` is false, so affected subtrees are skipped.
+3. **Requires LM-fitted constants**: the algorithm evaluates the tree on data, so constant values must be fitted first. Without fitting, all constants are 1.0 and pruning decisions would be wrong.
+
+### TODO: ~1×f(x) dedup
+
+`~1.0001 * f(x)` and `f(x)` are essentially the same formula but occupy different tree paths (`* R f` vs `f`). Brush doesn't simplify this — the product has the same variance as f(x), not near-constant. The multiplicative identity `1*x→x` was removed because error = |R-1| × |f(x)| is unbounded for large f(x). No known safe approach yet.
+
+### TODO: replace backpropagate + propagate with single root propagate
+
+`backpropagate` walks UP from a node to root, prepending moves incrementally. `propagate` walks DOWN from a node through matching children. In mutation/crossover, both are called — two walks covering the same nodes. A single `root->propagate(full_path, reward)` (plus `root->path_queue.append` for root itself) covers all existing nodes in one downward walk.
+
+**Why this works:** every formula that reaches a child also reaches the parent (backpropagate walks up, propagate walks down from ancestors). Parent's candidate pool ⊇ any child's pool. With equal queue capacity K, parent's best ≥ child's best — a mathematical invariant of the top-K selection. So top-down propagation from root loses nothing.
+
+**Benefits:** one walk instead of two, simpler code, and the full token sequence is naturally available for canonicalization (just `canonicalize(full_path, pset)` before propagating). The early-stop optimization in backpropagate (`if (!append) break`) is valid but saves at most ~10 failed appends per formula — negligible vs LM cost.
+
+**Current code has the full path available at every call site:** `state.get_op_list()` (descent + expansion) + `path` (rollout suffix). No reconstruction needed.
 
 ### Missing DGSR+MCTS comparison
 Kamienny's DGSR+MCTS (ref [25]) is cited in related work but **not benchmarked**. The paper compares against DSR, NGGP, GEGL, PySR — all weaker than DGSR+MCTS. Notable omission. Direct comparison would be informative: zero-training MCTS vs neural-guided MCTS on identical benchmarks.
