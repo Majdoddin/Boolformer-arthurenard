@@ -172,6 +172,22 @@ Decouple the search's reward signal from the simplification's reliability requir
 
 Compare to the naive alternative "always fit at 100 iterations": **100 per candidate, no cache, no refinement gating.** Two-tier with warm-start is cheaper on average *and* gives better precision where it matters.
 
+**Empirical finding (from unit tests):** Eigen's LM almost never hits the `maxfev`
+budget. Even with `lm_iterations=1` (maxfev=3) on a 2-constant affine formula,
+LM exits via `ftol` or `xtol` — it declares "converged" after 3 function
+evaluations whether the fit is good or terrible. Only formulas with many
+constants (≥6) and maxfev < ~10 actually trigger `TooManyFunctionEvaluation`.
+With the real budget of 50 (maxfev=52), a 6-constant nonlinear formula
+converged in 13 evals during warm-start.
+
+**Implication for the "reduced LM filters bad structures" argument:** the
+50-iter cap is not the mechanism that filters structurally-bad formulas.
+LM exits via tolerance regardless of budget. What actually filters is the
+**quality of the local minimum** — wrong structure → LM converges to a poor
+local optimum → low reward. The budget matters only at the margin (constants
+many OOM from 1.0, ill-conditioned Jacobians). For Nguyen-scale problems,
+50 is ample.
+
 This gives two propagations per qualifying formula:
 - **First** (upstream behavior, unchanged): F propagated normally with its low-LM reward via `backpropagate` + `propagate`.
 - **Second** (our addition): canonical form C propagated from root with its own low-LM reward.
