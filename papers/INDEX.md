@@ -17,6 +17,12 @@ touched.
 | Kamienny. **Efficient adaptation of reinforcement learning agents: from model-free exploration to symbolic world models** | tel-04391194 | Sorbonne PhD thesis 2023 | Full thesis version of above. Ch 7 = DGSR+MCTS (main source of our notes), Ch 8 = symbolic dynamics for MBRL, Appendix F = recurrent formulas (older work). | noted | [kamienny_notes.md](./kamienny_notes.md) |
 | Huang, Huang, Xiao, Ma, Ming, Shi, Wen. **Improving Monte Carlo Tree Search for Symbolic Regression** | [2509.15929](https://arxiv.org/abs/2509.15929) | NeurIPS 2025 | Classical token-level MCTS augmented with (1) extreme-bandit allocation with finite-time regret bounds under polynomial reward decay, (2) state-jumping actions — GP mutation/crossover applied to top-N stored trajectories per node, with bidirectional propagation. Most recent MCTS+SR SOTA. Code: github.com/PKU-CMEGroup/MCTS-4-SR. | noted, experiments | [huang2025_notes.md](./huang2025_notes.md), [huang2025_paper.md](./huang2025_paper.md), [huang2025_nguyen_runs.md](./huang2025_nguyen_runs.md), [huang2025_matched_pair_results.md](./huang2025_matched_pair_results.md), [huang2025_burst_expand_results.md](./huang2025_burst_expand_results.md) |
 
+## Cross-cutting topics
+
+| Topic | Summary | Notes |
+|---|---|---|
+| Near-constant subtree detection | Literature survey (Kinzett 2008, Johnston 2010, Rockett 2020, Javed 2022) and our Brush-based C++ implementation. Detects subtrees whose output barely varies on training data and replaces with constants. | [near_constant_subtree_detection.md](./near_constant_subtree_detection.md) |
+
 ## Adjacent / reference
 
 | Paper | arXiv | Venue | Summary | Status | Notes |

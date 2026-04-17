@@ -70,6 +70,71 @@ Per-iteration cost model (K=10 branching, depth=6, gp=0.2): expand evals/iter = 
 
 This isolates the advantage as the **lazy transition-moment design**, not sample count or GP rate. Burst-expand pays K × N = 10 evals per bursted leaf immediately, including at dead-end subtrees; matched-pair pays 1 eval per new child during exploration and only fires the full K × N re-eval at parents UCB revisits to the K-th child. The same CRN fairness property, achieved at ~25–30% lower overhead. See `huang2025_burst_expand_results.md` §"Why burst has a ~5× gap, not a ~2× gap" for the per-iteration cost breakdown that generalizes this observation to N ∈ {2, 4}.
 
+## Open question: is matched-pair just a GP / exploration ratio shift?
+
+**User's hypothesis (after running a Huang-baseline gp_rate sweep on the same three seeds):**
+
+> I ran this series of experiments, because I suspected the success of pair-match is because it basically moves the ratio of GP to random exploration (validation). Thoughts?
+
+The intuition: matched-pair adds ~N extra non-GP evaluations per iteration (random completions + evaluator calls), which shifts the effective GP share downward. Huang's default `gp_rate=0.2` fires GP at ~64% of per-iteration eval volume; matched-pair N=4 at the same nominal `gp_rate` fires GP at only ~26% of volume (the extra re-eval work dilutes). Maybe matched-pair's benefit is equivalent to "tune down gp_rate" but delivered via re-evaluation amortization instead of the probability gate.
+
+### Huang-baseline gp_rate sweep (evidence)
+
+Same three seeds (23654, 15795, 860), `kMatchedPairN = 0`, Nguyen-3 [-1, 1]. Recovery via `expand + nsimplify(tolerance=1e-3)`:
+
+| gp_rate | Mean time | Mean evals | Exact | Exploits observed |
+|---:|---:|---:|:---:|---|
+| < 0.15 (tested at 0.10, 0.13) | — | — | ≤ 2/3 | didn't work — transcendental exploits on multiple seeds |
+| 0.15 | 30.5s | 211k | **3/3** | — |
+| 0.17 | 20.2s | 140k | 2/3 | `x³·exp(50x/771)` |
+| 0.20 (default) | ~21.0s | ~174k | — | — (see 10-seed table above) |
+
+Huang is sensitive to gp_rate: 0.20 is slightly too GP-heavy on this seed triple, 0.15 is a local sweet spot with 3/3 exact, and either direction degrades structural recovery. Moving below 0.15 makes things strictly worse (exploits start dominating, no runtime benefit).
+
+### Analysis
+
+**Partial support for the hypothesis.** Matched-pair does effectively lower the GP/tree ratio, and some of its benefit is indistinguishable from "we tuned down `gp_rate`, but delivered the cut via re-evaluation amortization rather than gate probability." The sweet spot at Huang gp=0.15 confirms that lower GP share *does* help Nguyen-3 [-1, 1], so part of matched-pair's effect must be this same mechanism.
+
+**But two data points break the "just a ratio shift" interpretation:**
+
+1. **Cost curve doesn't match.** Huang at its best tested gp_rate (0.15) is 30.5s / 211k / 3/3 exact. Matched-pair N=1 at gp=0.20 is 14.6s / 132k / 3/3 exact. Same structural quality, but matched-pair is ~2× faster in time and ~1.6× in evals. A pure ratio-shift interpretation predicts equal performance at matched-pair's effective GP share. The gap suggests something extra is happening.
+
+2. **Burst-expand contradicts the hypothesis.** Burst has an even **more** extreme ratio shift than matched-pair (K × N = 10 tree-expansion evals per iter vs matched-pair's amortized ~5), and it's *slower*, not faster. If low GP share were the load-bearing mechanism, burst should win. It doesn't. So "lower GP share helps" is at best a weak effect — the *timing and correlation* of the extra rollouts matter more than the raw count.
+
+**What the full mechanism probably is.** The hypothesis is correct about one half and misses the other. Matched-pair does effectively lower GP share, and this does seem to help (hence Huang gp=0.15 being clean). But the *additional* speedup beyond what gp_rate tuning buys comes from:
+
+- **CRN variance reduction.** `Var(A − B)` with shared completion seeds is `2σ²(1 − ρ)`. On fragile benchmarks where completions determine most of the rollout signal and siblings are near-identical perturbations, `ρ` is close to 1, so sibling-comparison variance collapses. Independent rollouts at the same total count don't get this — their pairwise comparison variance is `2σ²`.
+- **Lazy timing.** The extra rollouts fire only at parents UCB deems worth revisiting K times. Dead-end branches never pay the K × N cost. Tree search is Zipf-distributed (most branches are dead ends), so laziness is a ~4–10× efficiency multiplier vs burst-expand's eager K-at-once approach.
+
+### Clean test to resolve this
+
+Replace `matched_pair_reevaluation`'s shared-seed loop with **independent** rollouts — fresh RNG per sibling, no seed sharing. Same eval count, same timing, same ratio shift, but no CRN.
+
+```cpp
+// Current (shared seeds across siblings = CRN):
+std::vector<uint64_t> seeds(kMatchedPairN);
+for (int i = 0; i < kMatchedPairN; ++i) seeds[i] = rng();
+for (auto& child : parent->children) {
+    for (uint64_t seed : seeds) {
+        RandomGenerator completion_rng(seed);
+        auto completion = child_state.random_fill(completion_rng);
+        ...
+    }
+}
+
+// Independent-reeval variant (no CRN, same eval volume/timing):
+for (auto& child : parent->children) {
+    for (int i = 0; i < kMatchedPairN; ++i) {
+        auto completion = child_state.random_fill(rng);   // main rng
+        ...
+    }
+}
+```
+
+If this independent-reeval version matches matched-pair's performance on the three seeds, the hypothesis is fully correct: it's all ratio shift plus lazy timing, and CRN is decorative. If it collapses back toward raw Huang performance (~21s / 174k at gp=0.2, or Huang gp=0.15's 30.5s / 211k), CRN is load-bearing.
+
+**Prior:** independent-reeval at N=4 lands somewhere between Huang gp=0.15 and matched-pair — closer to matched-pair for the ratio-shift contribution but missing the CRN benefit. Rough guess ~20s mean on these three seeds. A measurement would be more valuable than the prior; this is the cleanest isolation available short of changing the search algorithm entirely.
+
 ## Key Structural Observation
 
 **Matched-pair eliminates the transcendental-exploit class entirely (4/10 → 0/10).** All 10 matched-pair runs converge to polynomial or rational structures. The 6/10 "OK" runs explicitly recover the **cyclotomic factorization** of Φ₅(x):

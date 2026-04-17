@@ -133,32 +133,9 @@ The benchmark CSV has three expression columns: `expression` (raw prefix tokens)
 
 **For structural analysis, apply `nsimplify(materialized_expr, tolerance=1e-2)` without `expand` or `simplify`.** This snaps constants (0.618034 → rational or surd) and drops decorative terms (sin(x/6393264) → 0) while preserving the formula's operator skeleton. The structural findings in our matched-pair/burst-expand reports (golden-ratio cyclotomic factorizations, Horner forms, trig identity rediscoveries) came from reading `materialized_expression`, not the SymPy-destroyed `simplified_expression`.
 
-### Numerical simplification — prune negligible subtrees (implemented)
+### Near-constant subtree detection
 
-**Algorithm name:** "Numerical simplification" (Kinzett, Johnston & Zhang, 2008).
-
-**References:**
-- Kinzett et al. (2008), "Using Numerical Simplification to Control Bloat in Genetic Programming" — introduces the algorithm
-- Kinzett and Zhang (2010), "Investigation of simplification threshold and noise level" — investigates threshold vs noise relationship, no principled method found
-- Kattan and Poli (2010), "A Relaxed Approach to Simplification in Genetic Programming" — checks simplification effects several levels up the tree, not just locally
-- Javed, Gobet, and Lane (2022), "Simplification of genetic programs: a literature survey" in Data Mining and Knowledge Discovery — comprehensive survey
-
-**Reference implementation:** Brush (github.com/cavalab/brush), `src/simplification/constants.h` (~40 lines). Evaluates each non-leaf subtree on training data, replaces near-constant subtrees (variance < threshold) with a constant node (value = mean). Pre-order traversal.
-
-**Our implementation:** `include/imcts/core/simplify.hpp` — `simplify_to_prefix()`. After LM fitting, runs one forward pass over the tree on training data, checks per-node variance, emits simplified prefix tokens. Controlled by `simplify_threshold` config (0 = disabled).
-
-**Post-processing:** only additive identities (`0+x→x`, `x+0→x`, `x-0→x`). These clear dead constant nodes left by Brush replacements. Absolute error bounded by eps regardless of the other operand.
-
-Multiplicative identities (`1*x→x`, `0*x→0`) are NOT applied — their error = |coeff| × |f(x)| is unbounded for large f(x). Example: `0.0001 * exp(exp(100*x))` is huge, not zero. The variance check handles cases where the product is actually near-constant on the data.
-
-**Key caveats:**
-1. **Threshold**: configurable absolute variance threshold. Brush uses 1e-5. Relative thresholding is an open problem.
-2. **NaN/Inf**: implicit safety — `NaN < threshold` is false, so affected subtrees are skipped.
-3. **Requires LM-fitted constants**: the algorithm evaluates the tree on data, so constant values must be fitted first. Without fitting, all constants are 1.0 and pruning decisions would be wrong.
-
-### TODO: ~1×f(x) dedup
-
-`~1.0001 * f(x)` and `f(x)` are essentially the same formula but occupy different tree paths (`* R f` vs `f`). Brush doesn't simplify this — the product has the same variance as f(x), not near-constant. The multiplicative identity `1*x→x` was removed because error = |R-1| × |f(x)| is unbounded for large f(x). No known safe approach yet.
+See [near_constant_subtree_detection.md](./near_constant_subtree_detection.md) — literature survey (Kinzett 2008, Johnston 2010, Rockett 2020, Javed 2022 survey), our Brush-based implementation in `simplify.hpp`, caveats (multiplicative identities removed for safety), and the open `~1×f(x)` dedup problem.
 
 ### TODO: replace backpropagate + propagate with single root propagate
 
