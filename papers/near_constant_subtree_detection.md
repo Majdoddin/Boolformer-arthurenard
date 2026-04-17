@@ -417,6 +417,45 @@ simplify_threshold(F) = max(0, s_F)²
 
 **Expected benefit.** More aggressive decorative-term removal on clean benchmarks (Nguyen synthetic data, exact fits possible → large slack). Minor benefit on noisy/blackbox data where RMSE sits near the feasibility boundary.
 
+### TODO — structure-gated global optimization for nonlinear constants
+
+LM is a local optimizer. Constants that appear **inside** nonlinear functions
+(`sin(R*x)`, `exp(R*x)`, `1/(R+x)`) have multi-modal loss landscapes where
+LM gets stuck in wrong basins regardless of iteration budget. Constants that
+appear **linearly** (`R*f(x) + R`) are always convex — LM is optimal.
+
+Empirically confirmed: `R*sin(R*x)` fitting `3*sin(freq*x)` from seed (1,1)
+fails for freq ≥ 5. LM converges in ~7 evals to a wrong basin and declares
+"done" via ftol. 500 iterations produce the same wrong answer.
+
+**Proposal.** Gate a short CMA-ES (or similar global optimizer) on the
+formula's **structure**, not its reward:
+
+```
+if any R is inside a nonlinear unary op (sin/cos/exp/log/sqrt):
+    run CMA-ES(20 gens) + LM     (~150-300 function evals)
+else:
+    run LM only                   (~3-13 function evals)
+```
+
+Reward-based gating (top-N) doesn't work: LM stuck in bad basin → low
+reward → never qualifies → never gets global optimization. Structure-based
+gating avoids this chicken-and-egg.
+
+**Cost with caching.** Same structure hash → same CMA-ES result. Pay once
+per unique structure. Estimated 2-5% total overhead.
+
+**Detection reuses existing infrastructure.** Walk the tree once checking
+if any R leaf is a descendant of a nonlinear op — same pattern as the
+risky-path check in `simplify.hpp`.
+
+**When to implement.** After benchmarking the current pipeline. Measure
+how often the basin problem actually hurts results on Nguyen/blackbox
+benchmarks. MCTS search-level diversity (many structurally different
+formulas) may already compensate.
+
+Full analysis: `papers/constant_optimization_local_minima.md`.
+
 ### What we get at the end
 
 - **Decorative terms removed reliably** under well-fitted constants (Tier 2's high LM)
