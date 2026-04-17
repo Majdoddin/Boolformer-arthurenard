@@ -523,8 +523,15 @@ The `σ_y cancels` argument assumes `‖∇_θ f‖ · ‖θ*‖ ~ σ_y`. Four c
   `mcts4sr/source/evaluator/evaluator.cpp:21-24` computes mean + variance but
   only uses variance for σ_y. If benchmarks with large `|ȳ|/σ_y` appear
   (some blackbox datasets may), subtract ȳ before computing residuals.
-- **σ_y floor of 1.0** (`evaluator.cpp:24`) handles degenerate constant-y
-  datasets by collapsing nrmse to raw RMSE. Benign.
+- **σ_y floor of 1.0** (`evaluator.cpp:24`): when `σ_y < 1e-10`, the code
+  sets `σ_y = 1.0`. This implicitly switches the benchmark criterion from
+  relative (`RMSE < tol·σ_y`) to absolute (`RMSE < tol`). Without the floor,
+  `tol·σ_y → 0` as `σ_y → 0`, demanding sub-double-precision accuracy
+  (e.g., threshold `(1e-6·1e-11)² = 1e-34`) — the benchmark becomes
+  unsolvable for floating-point reasons, not formula quality. The floor
+  avoids this by capping the threshold at `(tol·1.0)² = tol²`. Not standard
+  in the literature; a pragmatic guard for a degenerate case absent from
+  standard benchmark suites.
 
 ### One-line verdict
 
