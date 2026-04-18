@@ -18,7 +18,7 @@
 
 The initial framing — "burst is the cleaner implementation of CRN, skipping wasted re-work" — turned out to be wrong in a way the table above hints at. Matched-pair is **lazy**: the expensive K × N re-eval fires only at parents UCB revisits to the K-th child, so dead-end subtrees never pay full price. Burst is **eager**: every leaf descent touches pays K × N evals immediately. Also, matched-pair's K-iteration gap between first and last child expansion lets GP accumulate history in the parent's path_queue, which then propagates down to the children; burst's one-shot expansion gives the children much thinner inherited path_queues. See §"Comparison with matched-pair N=4" for the per-iteration cost breakdown that explains the observed ~5× eval gap.
 
-**Code:** ~60 lines edited in `mcts4sr/source/mcts/mcts.cpp` and `include/imcts/mcts/mcts.hpp`.
+**Code:** commit `ab3566c` on branch `burst-expand-experiment` (pre-upstream-rebase, based on `bdc28a1`). Reverted in `0c039ba`. ~60 lines edited in `mcts4sr/source/mcts/mcts.cpp` and `include/imcts/mcts/mcts.hpp`.
 - Constant `kBurstSamplesN` (tested at 1, 2, 4), replacing `kMatchedPairN = 4`.
 - `expand_node()` removed, replaced by `burst_expand()`.
 - `matched_pair_reevaluation()` removed — its purpose was intended to be absorbed into `burst_expand`.

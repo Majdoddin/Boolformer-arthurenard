@@ -16,15 +16,20 @@ Per-problem, from scratch: 2M expression evaluations, ~2 min single-core. Compet
 
 ## Upstream default changes (commit 04e143a, 2026-04-15)
 
-Laivirt123 changed three defaults in `RegressorConfig` and `basic.yaml` without explanation (commit message: "Refactor benchmark runner and tune default search config"):
+Laivirt123 changed five defaults across two commits without explanation. Three in `04e143a` ("Refactor benchmark runner and tune default search config"), two more in `6012a9d` ("Refactor benchmark configuration and scripts"):
 
-| Parameter | Paper / old default | New default | Effect |
-|---|---|---|---|
-| `gp_rate` | 0.2 | **0.5** | GP mutation/crossover fires at 50% of non-leaf nodes instead of 20% |
-| `lm_iterations` | 100 | **50** | Levenberg-Marquardt constant-fitting budget halved |
-| `max_constants` | 6 | **10** | More `R` tokens allowed per formula (YAML only, C++ default unchanged) |
+| Parameter | Paper / old default | Upstream new | Our preferred | Where changed | Effect |
+|---|---|---|---|---|---|
+| `gp_rate` | 0.2 | **0.5** | **0.2** | C++ + YAML | GP mutation/crossover probability per non-leaf node |
+| `lm_iterations` | 100 | **50** | **50** | C++ + YAML | Levenberg-Marquardt constant-fitting budget |
+| `max_constants` | 6 | **10** | **6** | C++ + YAML | Max `R` tokens per formula |
+| `c` | 4.0 | **6.0** | **4.0** | YAML only | UCB exploration constant |
+| `exploration_rate` | 0.2 | **0.1** | **0.2** | YAML only | ε-greedy random child probability |
+| `matched_pair_n` | — | — | **4** | ours | Shared-seed re-eval count at transition moments |
 
-**Tension with our findings:** our matched-pair experiments on Nguyen-3 [-1,1] showed lower GP share helps (matched-pair's benefit was partly an effective gp_rate reduction from ~0.2 to ~0.15 equivalent). Upstream went the opposite direction. Our experiments were single-benchmark; upstream may have optimized for the broader suite. The `lm_iterations` cut is likely just compute savings — most fits converge in <50 iterations on 20-sample problems.
+Note: Python `defaults.py` was NOT updated for `gp_rate` (still 0.2) or `c`/`exploration_rate` (still 4.0/0.2). The YAML overrides Python defaults when using the benchmark runner, but direct Python API calls get the old values. Always set parameters explicitly when benchmarking.
+
+**Tension with our findings:** our matched-pair experiments on Nguyen-3 [-1,1] showed lower GP share helps (matched-pair's benefit was partly an effective gp_rate reduction from ~0.2 to ~0.15 equivalent). Upstream went the opposite direction. Our experiments were single-benchmark; upstream may have optimized for the broader suite. The `lm_iterations` cut is likely just compute savings — most fits converge in <50 iterations on 20-sample problems. The `c` increase (4→6) with `exploration_rate` decrease (0.2→0.1) shifts exploration from random to UCB-guided — more structured exploration but same total exploration budget roughly.
 
 ## Architecture: one flat tree
 
@@ -137,6 +142,20 @@ The benchmark CSV has three expression columns: `expression` (raw prefix tokens)
 
 See [near_constant_subtree_detection.md](./near_constant_subtree_detection.md) — literature survey (Kinzett 2008, Johnston 2010, Rockett 2020, Javed 2022 survey), our Brush-based implementation in `simplify.hpp`, caveats (multiplicative identities removed for safety), and the open `~1×f(x)` dedup problem.
 
+### Backpropagate break-on-rejection: unstated but critical design
+
+The paper describes bidirectional propagation (§3.2) but does not discuss the **break-on-rejection** semantics in `backpropagate`. In the code, `backpropagate` walks upward from the current node and **breaks immediately** when any node's `ExpQueue::append` returns false (rejected for low reward or near-duplicate). `propagate` (downward) does **not** break — it always walks the full path.
+
+This asymmetry is not an optimization detail. It is load-bearing for search quality. Empirical evidence:
+
+- An implementation that gates `backpropagate` on `any_accepted` (self OR any child accepted in `propagate`) instead of `self_accepted` (self only) causes a **71% regression** on Nguyen-3 (126k evals vs 73k baseline), reproduced on a clean build.
+- By the **Monotonicity Lemma** (parent's acceptance threshold ≥ self's), the extra backpropagate calls should be no-ops — parent should reject whenever self rejects. Yet the regression is real and reproducible. We cannot construct a counterexample to the lemma.
+- Correcting the gate to `self_accepted` restores bit-identical behavior across all 10 seeds.
+
+**Implication:** the break semantics in backpropagate interact with the search dynamics in ways that are not captured by static queue-state analysis. Even a minor perturbation to when backpropagate is called — theoretically a no-op — destabilizes the search. This makes backpropagate's break-on-rejection a first-class design invariant, not a removable optimization.
+
+Full analysis: [`propagate_before_backpropagate.md`](./propagate_before_backpropagate.md).
+
 ### TODO: replace backpropagate + propagate with single root propagate
 
 `backpropagate` walks UP from a node to root, prepending moves incrementally. `propagate` walks DOWN from a node through matching children. In mutation/crossover, both are called — two walks covering the same nodes. A single `root->propagate(full_path, reward)` (plus `root->path_queue.append` for root itself) covers all existing nodes in one downward walk.
@@ -144,6 +163,8 @@ See [near_constant_subtree_detection.md](./near_constant_subtree_detection.md) �
 **Why this works:** every formula that reaches a child also reaches the parent (backpropagate walks up, propagate walks down from ancestors). Parent's candidate pool ⊇ any child's pool. With equal queue capacity K, parent's best ≥ child's best — a mathematical invariant of the top-K selection. So top-down propagation from root loses nothing.
 
 **Benefits:** one walk instead of two, simpler code, and the full token sequence is naturally available for canonicalization (just `canonicalize(full_path, pset)` before propagating). The early-stop optimization in backpropagate (`if (!append) break`) is valid but saves at most ~10 failed appends per formula — negligible vs LM cost.
+
+**⚠️ Caution:** the above analysis assumes break-on-rejection is a pure optimization. The empirical evidence from the `any_accepted` bug (see section above) suggests the break semantics have deeper effects on search dynamics than the Monotonicity Lemma predicts. Replacing backpropagate with root-down propagate would remove the break — validate with full benchmarks before adopting.
 
 **Current code has the full path available at every call site:** `state.get_op_list()` (descent + expansion) + `path` (rollout suffix). No reconstruction needed.
 
