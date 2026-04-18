@@ -22,6 +22,7 @@ touched.
 | Topic | Summary | Notes |
 |---|---|---|
 | Near-constant subtree detection | Literature survey (Kinzett 2008, Johnston 2010, Rockett 2020, Javed 2022) and our Brush-based C++ implementation. Detects subtrees whose output barely varies on training data and replaces with constants. | [near_constant_subtree_detection.md](./near_constant_subtree_detection.md) |
+| Propagate-before-backpropagate | MCTS optimization: gate backpropagate on self's top-N acceptance. Equivalence proof (Monotonicity Lemma), `any_accepted` bug analysis, 10-seed verification. | [propagate_before_backpropagate.md](./propagate_before_backpropagate.md) |
 | Constant optimization local minima | LM gets stuck on nonlinear constants (frequency, exponent). Survey of remedies: multi-start, CMA-ES, geodesic acceleration. Proposal: structure-gated global optimization. | [constant_optimization_local_minima.md](./constant_optimization_local_minima.md) |
 
 ## Adjacent / reference
