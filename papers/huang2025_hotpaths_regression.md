@@ -104,6 +104,64 @@ Commit `21d7435` (matched-pair on top of hot paths + PCG). Single seed 23654.
 
 Each layer makes it worse. Hot paths alone: 3×. Adding matched-pair: 4× more. Adding lm=100: hits budget.
 
+## Experiment 5: Matched-pair on random seeds — controlled comparison (2026-05-12)
+
+**Question:** Does matched-pair's 2.35× speedup on pre-selected seeds generalize to unbiased seeds?
+
+**Design:** Same code (`bdc28a1`), same RNG (PCG64DXSM), same 10 seeds — only variable is `kMatchedPairN` (0 vs 4). This isolates matched-pair's effect with no confounds.
+
+Seeds from `secrets.randbits(32)`: 996657091, 1903754000, 1494059780, 952885591, 772058839, 3728297749, 988928067, 2251174867, 3170449109, 1817236458.
+
+Branch `experiment/random-seeds-mp-baseline` (commit `7fc9100`).
+
+| Seed | PCG only (N=0) evals | PCG only time | PCG+MP (N=4) evals | PCG+MP time | MP effect |
+|---|---|---|---|---|---|
+| 996657091 | 151,238 | 17.2s | 747,899 | 87.0s | 4.9× worse |
+| 1903754000 | 286,915 | 30.0s | 267,792 | 48.3s | 0.9× better |
+| 1494059780 | 217,650 | 24.6s | 96,667 | 16.0s | 2.3× better |
+| 952885591 | 143,072 | 15.0s | 316,581 | 55.8s | 2.2× worse |
+| 772058839 | 156,776 | 15.9s | 48,648 | 7.2s | 3.2× better |
+| 3728297749 | 129,640 | 13.6s | 269,778 | 45.4s | 2.1× worse |
+| 988928067 | 83,716 | 8.6s | 415,715 | 70.6s | 5.0× worse |
+| 2251174867 | 567,013 | 63.2s | 101,342 | 16.4s | 5.6× better |
+| 3170449109 | 77,245 | 8.0s | 2,000,000 | 253.6s | **25.9× worse** |
+| 1817236458 | 56,594 | 5.6s | 51,916 | 6.8s | 1.1× better |
+| **Mean** | **187k** | **20.2s** | **432k** | **60.7s** | **2.3× worse** |
+| **Success** | **10/10** | | **9/10** | | |
+
+Total wall time: PCG only = 201.8s, PCG+MP = 607.2s.
+
+Seed `3170449109` converges easily without MP (77k, 8.0s) but hits the 2M budget with MP (253.6s). 5 seeds are worse with MP, 5 better — but the "worse" cases are far more extreme (up to 26×) than the "better" ones (up to 5.6×).
+
+Seed `1817236458` with PCG-only has `test_r2=0.932` (overfit); with MP it achieves `test_r2=1.000`. So MP sometimes improves structural quality at the cost of higher mean evals.
+
+### Same code, same RNG: pre-selected vs random seeds
+
+| Config | Pre-selected seeds | Random seeds |
+|---|---|---|
+| PCG only (N=0) | 228k | **187k** |
+| PCG+MP (N=4) | **97k** | 432k |
+| MP speedup | **2.35×** | **0.43× (2.3× slower)** |
+
+Matched-pair's apparent 2.35× speedup on pre-selected seeds **reverses** to a 2.3× slowdown on random seeds. The pre-selected seeds are a favorable draw for MP, not representative of general performance.
+
+### Reproduce
+
+Branch `experiment/random-seeds-mp-baseline` on `majdoddin` remote (`Majdoddin/mcts4sr`). Hyperparameters same as all experiments in this doc (see §"Commits tested").
+
+```bash
+# MP N=4 run
+git checkout experiment/random-seeds-mp-baseline
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
+pip install -e .
+python -m iMCTS.benchmarks --group Nguyen --cases Nguyen-3 \
+  --seeds 996657091,1903754000,1494059780,952885591,772058839,3728297749,988928067,2251174867,3170449109,1817236458 \
+  --gp-rate 0.2 --lm-iterations 50 --max-constants 6 --c 4.0 --exploration-rate 0.2 \
+  --ops "+,-,*,/,sin,cos,exp,log,R"
+
+# MP N=0 run: edit source/mcts/mcts.cpp, set kMatchedPairN = 0, rebuild and rerun
+```
+
 ## Pre-selected seed bias
 
 MT19937 has poor single-integer seed diffusion (known defect, why NumPy replaced it in 2019). The benchmark's 100 seeds are all < 33000.
@@ -112,9 +170,10 @@ MT19937 has poor single-integer seed diffusion (known defect, why NumPy replaced
 |---|---|---|
 | MT19937, no hot paths | 164k | 258k |
 | MT19937, hot paths | 110k | 292k |
-| PCG, no hot paths | 37k | (not tested) |
+| PCG, no hot paths (N=0) | 228k | 187k |
+| PCG, matched-pair (N=4) | 97k | 432k |
 
-Pre-selected seeds are 1.6× easier for MT19937 than random seeds. PCG is 4.4× faster than MT19937 on pre-selected seeds (7× on random seeds, inferred). The pre-selected seeds flatter MT19937, masking both MT19937's weakness and the hot paths regression.
+The bias affects all configurations, but asymmetrically: pre-selected seeds make matched-pair look 5.4× better than it actually is (2.35× speedup → 2.3× slowdown).
 
 ## Conclusions
 
@@ -124,6 +183,6 @@ Pre-selected seeds are 1.6× easier for MT19937 than random seeds. PCG is 4.4× 
 
 3. **Hot paths is incompatible with PCG.** Mean evals 37k → 321k (8.7× worse). This blocks adoption of PCG (which itself gives 4–7× improvement over MT19937).
 
-4. **Pre-selected benchmark seeds are biased toward MT19937.** Random seeds give 1.6× worse results. The benchmark results reported in the paper may overstate MT19937's effectiveness.
+4. **Pre-selected benchmark seeds are biased.** The bias inflates not only upstream results but also our own: matched-pair's 2.35× speedup on pre-selected seeds reverses to a 2.3× slowdown on random seeds (Experiment 5).
 
-5. **Our matched-pair-baseline (`bdc28a1`, PCG, no hot paths) remains the best configuration.** Mean 37k without matched-pair, 97k with matched-pair (10/10 exact polynomial recovery). Do not rebase onto upstream's hot paths commit.
+5. **PCG without matched-pair is the best configuration on random seeds.** Mean 187k, 10/10 success, 20.2s total. Adding matched-pair makes it 2.3× worse. The earlier recommendation of `bdc28a1` (PCG+MP) as best config was based on biased seeds and is retracted.

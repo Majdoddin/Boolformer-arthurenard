@@ -12,11 +12,12 @@ Surgical matched-pair sampling at MCTS transition moments. When a parent's last 
 
 ## Setup
 
+- **Code:** commit `bdc28a1` on `matched-pair-baseline` branch (pre-upstream-rebase). Reproduced exactly on 2026-04-18.
 - Benchmark: Nguyen-3 = `x⁵ + x⁴ + x³ + x² + x`, range [-1, 1], 20 samples (40 effective via `sample_multiplier=2`)
 - Op set: `{+, -, *, /, sin, cos, exp, log, R}` (Nguyen default + R)
 - RNG: PCG64DXSM (already in place from earlier PR)
 - Seeds: Huang's fixed list, indices 0–9 (so 10 distinct 5-digit seeds)
-- Hyperparameters: max_depth=6, max_constants=6, max_evals=2M, K=500, c=4.0, γ=0.5
+- Hyperparameters: max_depth=6, max_constants=6, max_evals=2M, K=500, c=4.0, γ=0.5, gp_rate=0.2, lm_iterations=50, exploration_rate=0.2
 - Success criterion: `reward ≥ 1 − 1e-6`
 
 ## Headline Results
@@ -276,6 +277,8 @@ These rich rediscoveries happen specifically *under matched-pair*, suggesting CR
 | Nguyen-4 | `x·Φ₂·Φ₃·Φ₆` (degree 6) | 1/1 cap-bound | ~2M | 195k | **~0.1×** | **Regression** — integer-coefficient factor structure already easy for baseline |
 | Nguyen-5 | `sin(x²)·cos(x) − 1` | **10/10** (incl. trig identities) | 52k | 75k | **1.6×** | Rediscovered cofunction identity, 2π periodicity, `log(1/e) = −1` |
 
+**Caveat (2026-05-12):** These results use pre-selected seeds only. On random seeds, Nguyen-3 MP speedup reverses from 2.35× to 0.43×. See §"Random-seed validation" below.
+
 **Pattern emerging.** Matched-pair seems to help when:
 1. The target has algebraically rich structure with non-integer coefficients (golden ratio φ, π, e, etc.) — CRN helps LM lock onto correct surds across siblings consistently
 2. There are competing reward-1.0 exploit basins (Nguyen-3 transcendental tricks) — CRN cancels the rollout-luck advantage of exploits
@@ -286,13 +289,29 @@ It hurts (or is neutral) when:
 
 **Refined publication framing.** Matched-pair isn't a uniform improvement — it's specifically a fix for *fragile benchmarks* (those with multiple reward-1.0 attractors). The right framing for a paper is **"variance-reduced MCTS for fragile reward landscapes"**, not "matched-pair MCTS is better". The Nguyen-4 regression is honest negative-result evidence that strengthens the paper rather than weakens it: it shows the mechanism is targeted, not magic.
 
+## Random-seed validation (2026-05-12) — matched-pair does NOT generalize
+
+**Full data:** see `huang2025_hotpaths_regression.md` § Experiment 5.
+
+All results above used the benchmark's pre-selected seeds (Huang's fixed list, indices 0–9). Experiment 5 re-ran the headline Nguyen-3 comparison on 10 unbiased seeds drawn from `secrets.randbits(32)`, using the same code (`bdc28a1`), same RNG (PCG64DXSM), same hyperparameters.
+
+| Config | Pre-selected seeds | Random seeds |
+|---|---|---|
+| PCG only (N=0) | 228k | 187k |
+| PCG+MP (N=4) | **97k** | 432k |
+| MP speedup | **2.35×** | **0.43× (2.3× slower)** |
+
+Matched-pair's 2.35× speedup **reverses** to a 2.3× slowdown on random seeds. One seed (`3170449109`) hits the 2M budget with MP but converges at 77k without it. The pre-selected seeds are a favorable draw for MP.
+
+**Implication:** the headline results, cross-problem summary, and speedup claims in this document are valid only for the pre-selected seed set. The "structural quality filter" mechanism (§"Why It's Faster Despite Doing More Work Per Transition") may still be real but is overwhelmed by the variance MP introduces on harder seeds. Matched-pair is not a general improvement — it is seed-dependent and net-negative on unbiased draws.
+
 ## Next Tests
 
-1. Run on Nguyen-3 [-10, 10] to confirm matched-pair is neutral when exploits don't exist
-2. Run on all 12 Nguyen cases to see overall effect on the standard benchmark
-3. Test N=8 for cost-vs-quality tradeoff (N ∈ {1, 2, 4} tested on three-seed subset)
-4. Run on Livermore-9 (degree-9 polynomial) to test if cyclotomic-style behavior generalizes
-5. Run on Nguyen-5/6 (sin·cos targets) to test if matched-pair *hurts* when transcendentals are actually needed
+1. ~~Run on Nguyen-3 [-10, 10] to confirm matched-pair is neutral when exploits don't exist~~
+2. ~~Run on all 12 Nguyen cases to see overall effect on the standard benchmark~~
+3. Investigate why MP catastrophically fails on specific seeds (e.g., 3170449109: 77k → 2M)
+4. Test independent-reeval variant (no CRN, same eval volume) on random seeds — see §"Clean test to resolve this"
+5. Consider whether matched-pair can be made adaptive (enable only when sibling variance is high)
 
 ## Code Diff
 

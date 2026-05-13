@@ -97,7 +97,7 @@ We cannot construct a case where self rejects but an ancestor accepts. Yet empir
 
 ## Benchmark verification
 
-Nguyen-3, 10 seeds, propagate-before-backpropagate with `self_accepted` gate. All eval counts match baseline (commit `bdc28a1` on `research-backup` branch) exactly:
+Nguyen-3, 10 seeds, propagate-before-backpropagate with `self_accepted` gate. All eval counts match baseline (commit `bdc28a1` on `matched-pair-baseline` branch) exactly:
 
 | Seed | Baseline evals | PropChange evals | Time |
 |---|---|---|---|
@@ -117,7 +117,7 @@ Nguyen-3, 10 seeds, propagate-before-backpropagate with `self_accepted` gate. Al
 
 ## Code
 
-Commit `d2fecb9` on branch `propagate-before-backpropagate` (worktree `/tmp/mcts4sr-mp-test`, based on `bdc28a1` from `research-backup`).
+Commit `d2fecb9` on branch `propagate-before-backpropagate` (worktree `/tmp/mcts4sr-mp-test`, based on `bdc28a1` from `matched-pair-baseline`).
 
 ## Purpose
 
