@@ -18,18 +18,25 @@ Per-problem, from scratch: 2M expression evaluations, ~2 min single-core. Compet
 
 Laivirt123 changed five defaults across two commits without explanation. Three in `04e143a` ("Refactor benchmark runner and tune default search config"), two more in `6012a9d` ("Refactor benchmark configuration and scripts"):
 
-| Parameter | Paper / old default | Upstream new | Our preferred | Where changed | Effect |
-|---|---|---|---|---|---|
-| `gp_rate` | 0.2 | **0.5** | **0.2** | C++ + YAML | GP mutation/crossover probability per non-leaf node |
-| `lm_iterations` | 100 | **50** | **50** | C++ + YAML | Levenberg-Marquardt constant-fitting budget |
-| `max_constants` | 6 | **10** | **6** | C++ + YAML | Max `R` tokens per formula |
-| `c` | 4.0 | **6.0** | **4.0** | YAML only | UCB exploration constant |
-| `exploration_rate` | 0.2 | **0.1** | **0.2** | YAML only | ε-greedy random child probability |
-| `matched_pair_n` | — | — | **4** | ours | Shared-seed re-eval count at transition moments |
+| Parameter | Paper / old default | Upstream new | Where changed | Effect |
+|---|---|---|---|---|
+| `gp_rate` | 0.2 | **0.5** | C++ + YAML | GP mutation/crossover probability per non-leaf node |
+| `lm_iterations` | 100 | **50** | C++ + YAML | Levenberg-Marquardt constant-fitting budget |
+| `max_constants` | 6 | **10** | C++ + YAML | Max `R` tokens per formula |
+| `c` | 4.0 | **6.0** | YAML only | UCB exploration constant |
+| `exploration_rate` | 0.2 | **0.1** | YAML only | ε-greedy random child probability |
 
 Note: Python `defaults.py` was NOT updated for `gp_rate` (still 0.2) or `c`/`exploration_rate` (still 4.0/0.2). The YAML overrides Python defaults when using the benchmark runner, but direct Python API calls get the old values. Always set parameters explicitly when benchmarking.
 
-**Tension with our findings:** our matched-pair experiments on Nguyen-3 [-1,1] showed lower GP share helps (matched-pair's benefit was partly an effective gp_rate reduction from ~0.2 to ~0.15 equivalent). Upstream went the opposite direction. Our experiments were single-benchmark; upstream may have optimized for the broader suite. The `lm_iterations` cut is likely just compute savings — most fits converge in <50 iterations on 20-sample problems. The `c` increase (4→6) with `exploration_rate` decrease (0.2→0.1) shifts exploration from random to UCB-guided — more structured exploration but same total exploration budget roughly.
+**Net effect of the HP shift:** paper HP (c=1, gp_rate=0.2, ε=0.2) was exploration-heavy — 80% MCTS rollouts, low UCB constant, high random child probability. New HP (c=6, gp_rate=0.5, ε=0.1) is exploitation-heavy — 50% GP mutations bypass the tree entirely, high UCB drives structured exploration, random child rate halved. Consequences confirmed by our 100-seed benchmarks (2026-05-13):
+
+1. **Seed sensitivity vanishes.** MT+SRBench, MT+quantum, PCG+quantum all within 0.3% on both Nguyen (93.6-94.2%) and Livermore (72.3-72.6%). With paper HP, rollout quality mattered because 80% of compute was random tree exploration. With new HP, 50% is GP mutations that bypass the tree — less surface area for RNG quality to affect.
+
+2. **Ground-truth benchmarks are saturated.** Upstream with new HP solves essentially all problems within structural reach (depth ≤ 6, right ops). Remaining failures are depth-limited (Livermore-9, -21) or need R token. No search quality failures remain.
+
+3. **Matched pair has no room.** MP was designed to fix unfair sibling comparisons during tree exploration. With gp_rate=0.5, half the compute skips the tree. We benchmarked MP (N=4, N=6) on Livermore-3 and -14 with old HP — MP helped (82% vs lower baseline). But upstream without R already solves those at 100%/95% with new HP. No concrete case where new-HP baseline fails and MP saves it.
+
+4. **Focus shifts to BlackBox.** Ground-truth is saturated; the remaining frontier is SRBench BlackBox (122 real-world problems) where MCTS-4-SR ranks 2nd behind Operon at ~0.9 median test R². Our LM noise regularization (inject noise during constant fitting to prevent overfitting) showed a concrete win: on bodyfat, seed 5390 produced the Siri equation (complexity 7, test R² 0.90) instead of an overfit monster (complexity 51, test R² 0.90). Branch: `benchmark/seed-bias`.
 
 ## Architecture: one flat tree
 
@@ -210,7 +217,7 @@ All three are genuinely good ideas. Let me think through each:
 
 These would be a solid paper on top of Huang. Quality-of-search improvements, not just a new benchmark number.
 
-#### Refinement to suggestion 1: matched-pair sampling over *multiple* shared completions
+#### Refinement to suggestion 1: matched-pair sampling over *multiple* shared completions (implemented, not effective with new HP)
 
 Suggestion 1 (common completion across siblings) is a special case of **Common Random Numbers (CRN)** — the variance-reduction technique from simulation/statistics. Standard CRN uses a *single* shared completion. That's not fully fair in SR for a subtle reason: siblings that differ structurally also differ in what they "absorb" of the target, so they want *different* optimal contexts for the rest of the formula.
 
