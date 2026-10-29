@@ -18,25 +18,25 @@ Per-problem, from scratch: 2M expression evaluations, ~2 min single-core. Compet
 
 Laivirt123 changed five defaults across two commits without explanation. Three in `04e143a` ("Refactor benchmark runner and tune default search config"), two more in `6012a9d` ("Refactor benchmark configuration and scripts"):
 
-| Parameter | Paper / old default | Upstream new | Where changed | Effect |
-|---|---|---|---|---|
-| `gp_rate` | 0.2 | **0.5** | C++ + YAML | GP mutation/crossover probability per non-leaf node |
-| `lm_iterations` | 100 | **50** | C++ + YAML | Levenberg-Marquardt constant-fitting budget |
-| `max_constants` | 6 | **10** | C++ + YAML | Max `R` tokens per formula |
-| `c` | 4.0 | **6.0** | YAML only | UCB exploration constant |
-| `exploration_rate` | 0.2 | **0.1** | YAML only | ε-greedy random child probability |
+| Parameter | Paper (Table 4) | Old code default | Upstream new | Where changed | Effect |
+|---|---|---|---|---|---|
+| `gp_rate` | 0.2 | 0.2 | **0.5** | C++ + YAML | GP mutation/crossover probability per non-leaf node |
+| `lm_iterations` | — (paper says BFGS) | 100 | **50** | C++ + YAML | Levenberg-Marquardt constant-fitting budget |
+| `max_constants` | 10 | 6 | **10** | C++ + YAML | Max `R` tokens per formula |
+| `c` | 1 | 4.0 | **6.0** | YAML only | UCB exploration constant |
+| `exploration_rate` | 0.2 | 0.2 | **0.1** | YAML only | ε-greedy random child probability |
 
 Note: Python `defaults.py` was NOT updated for `gp_rate` (still 0.2) or `c`/`exploration_rate` (still 4.0/0.2). The YAML overrides Python defaults when using the benchmark runner, but direct Python API calls get the old values. Always set parameters explicitly when benchmarking.
 
-**Net effect of the HP shift:** paper HP (c=1, gp_rate=0.2, ε=0.2) was exploration-heavy — 80% MCTS rollouts, low UCB constant, high random child probability. New HP (c=6, gp_rate=0.5, ε=0.1) is exploitation-heavy — 50% GP mutations bypass the tree entirely, high UCB drives structured exploration, random child rate halved. Consequences confirmed by our 100-seed benchmarks (2026-05-13):
+**Net effect of the HP shift.** Relative to the old defaults, the new ones raise the per-node probability of a GP state-jump during descent (0.2 → 0.5), so a larger share of evaluations comes from mutating stored formulas instead of tree rollouts — already about 70% at 0.2 by our estimate in § "GP/tree budget ratio concern" below. They also trade random child selection (ε 0.2 → 0.1) for more UCB-driven exploration (c 4 → 6). Our 100-seed benchmarks under the new defaults (2026-05-13, details in `srbench_seed_provenance.md`) show:
 
-1. **Seed sensitivity vanishes.** MT+SRBench, MT+quantum, PCG+quantum all within 0.3% on both Nguyen (93.6-94.2%) and Livermore (72.3-72.6%). With paper HP, rollout quality mattered because 80% of compute was random tree exploration. With new HP, 50% is GP mutations that bypass the tree — less surface area for RNG quality to affect.
+1. **No measurable seed sensitivity.** MT+SRBench, MT+quantum, PCG+quantum all within 0.3% on both Nguyen (93.6–94.2%) and Livermore (72.3–72.6%). The seed effects seen earlier came from 10-seed runs under the old defaults and were within sampling noise. Neither the old defaults nor the paper's Table 4 settings have been tested at 100 seeds.
 
-2. **Ground-truth benchmarks are saturated.** Upstream with new HP solves essentially all problems within structural reach (depth ≤ 6, right ops). Remaining failures are depth-limited (Livermore-9, -21) or need R token. No search quality failures remain.
+2. **Ground-truth benchmarks are saturated.** Every Livermore problem within depth 6 is solved at ≥94% with the right operator set: R for the constant-limited problems, no R for Livermore-3 and -14 (R enlarges their search space and drops them to 43–49%). Remaining failures are depth-limited (Livermore-9, -21) or near-equivalent alternative formulas on [-1,1]. No search-quality failures remain.
 
-3. **Matched pair has no room.** MP was designed to fix unfair sibling comparisons during tree exploration. With gp_rate=0.5, half the compute skips the tree. We benchmarked MP (N=4, N=6) on Livermore-3 and -14 with old HP — MP helped (82% vs lower baseline). But upstream without R already solves those at 100%/95% with new HP. No concrete case where new-HP baseline fails and MP saves it.
+3. **Matched pair has no room.** MP targets unfair sibling comparisons during tree exploration. We benchmarked it (N=4, N=6) on Livermore-3 and -14 with R under the old defaults: 82% and 35% at N=4. But upstream without R already solves both at ≥94% under the new defaults, so there is no case where the new-default baseline fails and MP saves it.
 
-4. **Focus shifts to BlackBox.** Ground-truth is saturated; the remaining frontier is SRBench BlackBox (122 real-world problems) where MCTS-4-SR ranks 2nd behind Operon at ~0.9 median test R². Our LM noise regularization (inject noise during constant fitting to prevent overfitting) showed a concrete win: on bodyfat, seed 5390 produced the Siri equation (complexity 7, test R² 0.90) instead of an overfit monster (complexity 51, test R² 0.90). Branch: `benchmark/seed-bias`.
+4. **Black-box is the next target, but bodyfat was the wrong evidence.** MCTS-4-SR ranks 2nd behind Operon on SRBench black-box (~0.9 median test R²). We took `bodyfat` as a noisy example. It isn't: its target is Siri's equation `495/Density − 450` applied to the Density feature, exact on 247 of 252 rows; the other 5 (0-indexed 47, 75, 95, 168, 181) are data errors. Each run's test R² is set by how many of those rows land in its test split — Siri's own test R² on each run's split matches the method's within 0.007 on all 5 seeds checked (seed 5390 has 3 bad rows in test, so every formula, the true one included, scores 0.90 there). The repo harness draws a new split per run seed; the paper says the split uses "a fixed random seed" (Appendix H). LM noise injection (`lm_noise`: noise of 1% of mean |y| added to the targets during constant fitting, branch `benchmark/seed-bias`) made seed 5390 recover the generating formula, `494/Density − 449` (complexity 7), instead of a 51-node expression — a structural result at the same test R². Whether black-box data leaves room for better search needs a genuinely noisy dataset.
 
 ## Architecture: one flat tree
 

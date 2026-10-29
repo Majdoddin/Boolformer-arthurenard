@@ -4,7 +4,7 @@
 
 ## Summary
 
-Upstream commit `a5c87f9` ("Optimize evaluation hot paths and add profiling hooks") is labeled as a performance optimization but changes search behavior. It is incompatible with PCG64DXSM, causing up to 39× regression on individual seeds. The pre-selected benchmark seeds mask this problem because they are favorable to MT19937.
+Upstream commit `a5c87f9` ("Optimize evaluation hot paths and add profiling hooks") is labeled as a performance optimization but changes search behavior. It is incompatible with PCG64DXSM, causing up to 39× regression on individual seeds. On 10 seeds, the pre-selected benchmark seeds appeared to favor MT19937 and mask the problem. Later 100-seed runs found no seed effect under the repo's current hyperparameters (see `srbench_seed_provenance.md`), so the seed-related observations below are 10-seed results under the old defaults, not established effects.
 
 ## Commits tested
 
@@ -162,9 +162,9 @@ python -m iMCTS.benchmarks --group Nguyen --cases Nguyen-3 \
 # MP N=0 run: edit source/mcts/mcts.cpp, set kMatchedPairN = 0, rebuild and rerun
 ```
 
-## Pre-selected seed bias
+## Pre-selected vs random seeds (10 seeds each)
 
-MT19937 has poor single-integer seed diffusion (known defect, why NumPy replaced it in 2019). The benchmark's 100 seeds are all < 33000.
+MT19937 has poor single-integer seed diffusion (known defect, why NumPy replaced it in 2019). The benchmark's 100 seeds are all < 33000, which raised the suspicion of a seed bias.
 
 | Config | Pre-selected seeds | Random seeds |
 |---|---|---|
@@ -173,16 +173,16 @@ MT19937 has poor single-integer seed diffusion (known defect, why NumPy replaced
 | PCG, no hot paths (N=0) | 228k | 187k |
 | PCG, matched-pair (N=4) | 97k | 432k |
 
-The bias affects all configurations, but asymmetrically: pre-selected seeds make matched-pair look 5.4× better than it actually is (2.35× speedup → 2.3× slowdown).
+With 10 seeds per cell these gaps are within sampling noise: per-seed counts span 36k to 469k in the experiments above. The 100-seed follow-up (`srbench_seed_provenance.md`) found no seed effect under the current hyperparameters; under these old defaults it is untested at scale. What does hold is the statement about matched-pair: its 2.35× speedup on pre-selected seeds became a 2.3× slowdown on random seeds, so the gain did not survive fresh seeds.
 
 ## Conclusions
 
 1. **`a5c87f9` is not a pure optimization.** It changes search behavior on every seed tested. Labeled "optimize" with no documentation of functional changes.
 
-2. **The improvement on pre-selected seeds does not generalize.** With random seeds, hot paths is neutral (258k → 292k). The apparent improvement (164k → 110k) is an artifact of seed selection.
+2. **The improvement on pre-selected seeds does not generalize.** With random seeds, hot paths is neutral (258k → 292k). The apparent improvement (164k → 110k) did not carry over to random seeds (10 seeds each).
 
-3. **Hot paths is incompatible with PCG.** Mean evals 37k → 321k (8.7× worse). This blocks adoption of PCG (which itself gives 4–7× improvement over MT19937).
+3. **Hot paths is incompatible with PCG.** Mean evals 37k → 321k (8.7× worse). This blocks adoption of PCG. PCG looked 4–7× better than MT19937 on these 10 seeds; at 100 seeds under the current hyperparameters PCG and MT19937 perform the same (`srbench_seed_provenance.md`), so that gap is not a property of the RNG.
 
-4. **Pre-selected benchmark seeds are biased.** The bias inflates not only upstream results but also our own: matched-pair's 2.35× speedup on pre-selected seeds reverses to a 2.3× slowdown on random seeds (Experiment 5).
+4. **Seed bias: suspected, not confirmed.** Matched-pair's 2.35× speedup on pre-selected seeds reverses to a 2.3× slowdown on random seeds (Experiment 5), which retracts the matched-pair speedup claim. A general bias of the benchmark seeds was not confirmed: the 100-seed runs found none under the current hyperparameters.
 
-5. **PCG without matched-pair is the best configuration on random seeds.** Mean 187k, 10/10 success, 20.2s total. Adding matched-pair makes it 2.3× worse. The earlier recommendation of `bdc28a1` (PCG+MP) as best config was based on biased seeds and is retracted.
+5. **PCG without matched-pair is the best configuration on random seeds.** Mean 187k, 10/10 success, 20.2s total. Adding matched-pair makes it 2.3× worse. The earlier recommendation of `bdc28a1` (PCG+MP) as best config did not hold on random seeds and is retracted.
